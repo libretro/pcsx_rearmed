@@ -1705,7 +1705,7 @@ void retro_init(void)
 	spu_config.iUseFixedUpdates = 1;
 
 	McdDisable[0] = 0;
-	McdDisable[1] = 1;
+	McdDisable[1] = 0;
 	init_memcard(Mcd1Data);
 
 	SaveFuncs.open = save_open;
