@@ -31,7 +31,7 @@
 #include "plugin_lib.h"
 #include "arm_features.h"
 #include "revision.h"
-#include "libretro.h"
+#include "libretro-common/include/libretro.h"
 
 #ifdef _3DS
 #include "3ds/3ds_utils.h"
@@ -807,7 +807,7 @@ void retro_cheat_set(unsigned index, bool enabled, const char *code)
 	// cheat funcs are destructive, need a copy..
 	strncpy(buf, code, sizeof(buf));
 	buf[sizeof(buf) - 1] = 0;
-	
+
 	//Prepare buffered cheat for PCSX's AddCheat fucntion.
 	int cursor=0;
 	int nonhexdec=0;
@@ -821,7 +821,7 @@ void retro_cheat_set(unsigned index, bool enabled, const char *code)
 		}
 		cursor++;
 	}
-	
+
 
 	if (index < NumCheats)
 		ret = EditCheat(index, "", buf);
@@ -1566,7 +1566,7 @@ static void update_variables(bool in_flight)
    }
    else{
       //not yet running
-      
+
       //bootlogo display hack
       if (found_bios) {
          var.value = "NULL";
@@ -1888,7 +1888,7 @@ void retro_init(void)
 	const char *dir;
 	char path[256];
 	int i, ret;
-   
+
    found_bios = false;
 
 #ifdef __MACH__
@@ -1907,7 +1907,7 @@ void retro_init(void)
    psxUnmapHook = pl_vita_munmap;
 #endif
 	ret = emu_core_preinit();
-#ifdef _3DS 
+#ifdef _3DS
    /* emu_core_preinit sets the cpu to dynarec */
    if(!__ctr_svchax)
       Config.Cpu = CPU_INTERPRETER;
@@ -1927,9 +1927,9 @@ void retro_init(void)
 #else
 	vout_buf = malloc(VOUT_MAX_WIDTH * VOUT_MAX_HEIGHT * 2);
 #endif
-  
+
   vout_buf_ptr = vout_buf;
-  
+
 	if (environ_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &dir) && dir)
 	{
 		snprintf(Config.BiosDir, sizeof(Config.BiosDir), "%s", dir);
