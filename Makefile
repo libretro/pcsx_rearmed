@@ -134,7 +134,7 @@ OBJS += plugins/gpu_unai/gpulib_if.o
 ifeq "$(ARCH)" "arm"
 OBJS += plugins/gpu_unai/gpu_arm.o
 endif
-plugins/gpu_unai/gpulib_if.o: CFLAGS += -DREARMED -O3 
+plugins/gpu_unai/gpulib_if.o: CFLAGS += -DREARMED -O3
 CC_LINK = $(CXX)
 endif
 
@@ -238,6 +238,7 @@ OBJS += frontend/main.o frontend/plugin.o
 
 frontend/menu.o frontend/main.o: frontend/revision.h
 frontend/plat_sdl.o frontend/libretro.o: frontend/revision.h
+frontend/libretro.o: CFLAGS += -Ifrontend/libretro-common/include
 
 frontend/libpicofe/%.c:
 	@echo "libpicofe module is missing, please run:"

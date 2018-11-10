@@ -31,7 +31,7 @@
 #include "plugin_lib.h"
 #include "arm_features.h"
 #include "revision.h"
-#include "libretro-common/include/libretro.h"
+#include "libretro.h"
 
 #ifdef _3DS
 #include "3ds/3ds_utils.h"
