@@ -1,3 +1,5 @@
 [submodule "frontend/libretro-common"]
 	path = frontend/libretro-common
 	url = https://github.com/libretro/libretro-common.git
+	ignore = dirty
+	branch = master
