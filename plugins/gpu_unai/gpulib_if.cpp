@@ -165,11 +165,11 @@ void renderer_notify_res_change(void)
 
 extern const unsigned char cmd_lengths[256];
 
-int do_cmd_list(unsigned int *list, int list_len, int *last_cmd)
+int do_cmd_list(u32 *list, int list_len, int *last_cmd)
 {
-  unsigned int cmd = 0, len, i;
-  unsigned int *list_start = list;
-  unsigned int *list_end = list + list_len;
+  u32 cmd = 0, len, i;
+  u32 *list_start = list;
+  u32 *list_end = list + list_len;
 
   linesInterlace = force_interlace;
 #ifdef HAVE_PRE_ARMV7 /* XXX */

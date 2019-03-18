@@ -36,6 +36,7 @@ LIBDL := -lroot -lnetwork
 else
 LIBDL := -ldl
 endif
+LIBM := -lm
 MMAP_WIN32=0
 EXTRA_LDFLAGS =
 
@@ -54,13 +55,19 @@ else ifeq ($(platform), linux-portable)
 	LIBZ :=
 	LIBPTHREAD :=
 	LIBDL :=
+	LIBM :=
 	NO_UNDEF_CHECK = 1
 
 # OS X
 else ifeq ($(platform), osx)
+	USE_DYNAREC ?= 1
 	TARGET := $(TARGET_NAME)_libretro.dylib
 	fpic := -fPIC
 	fpic += -mmacosx-version-min=10.1
+ifeq ($(USE_DYNAREC),0)
+	# Override
+	TARGET := $(TARGET_NAME)_interpreter_libretro.dylib
+endif
 
 # iOS
 else ifeq ($(platform),$(filter $(platform),ios-arm64))
@@ -73,10 +80,10 @@ else ifeq ($(platform),$(filter $(platform),ios-arm64))
 else ifneq (,$(findstring ios,$(platform)))
 	ARCH := arm
 	USE_DYNAREC ?= 1
-    HAVE_NEON = 1
-    BUILTIN_GPU = neon
+	HAVE_NEON = 1
+	BUILTIN_GPU = neon
 	TARGET := $(TARGET_NAME)_libretro_ios.dylib
-ifeq ($(USE_DYNAREC),1)
+ifeq ($(USE_DYNAREC),0)
 	# Override
 	TARGET := $(TARGET_NAME)_interpreter_libretro_ios.dylib
 endif
@@ -170,7 +177,7 @@ else ifeq ($(platform), ctr)
 	CFLAGS += -Werror=implicit-function-declaration
 
 #	CFLAGS += -DPCSX
-	BUILTIN_GPU = unai
+#	BUILTIN_GPU = unai
 	USE_DYNAREC = 1
 	DRC_CACHE_BASE = 0
 	ARCH = arm
@@ -215,6 +222,7 @@ else ifeq ($(platform), qnx)
 	MAIN_LDLIBS += -lsocket
 	LIBPTHREAD :=
 	LIBDL :=
+	LIBM :=
 
 #Raspberry Pi 2
 else ifeq ($(platform), rpi2)
@@ -347,11 +355,12 @@ else
 	MAIN_LDLIBS += -lws2_32
 	LIBPTHREAD :=
 	LIBDL :=
+	LIBM :=
 endif
 
 CFLAGS += $(fpic)
 MAIN_LDFLAGS += -shared
-MAIN_LDLIBS += $(LIBPTHREAD) $(LIBDL) $(LIBZ)
+MAIN_LDLIBS += $(LIBPTHREAD) $(LIBM) $(LIBDL) $(LIBZ)
 
 # try to autodetect stuff for the lazy
 ifndef ARCH
@@ -382,13 +391,14 @@ SOUND_DRIVERS = libretro
 PLUGINS =
 NO_CONFIG_MAK = yes
 
-libretro_all: all
-ifeq ($(platform),ios)
-ifeq ($(USE_DYNAREC),1)
-	make -f Makefile.libretro USE_DYNAREC=0 platform=$(platform) clean
-	make -f Makefile.libretro USE_DYNAREC=0 platform=$(platform)
-endif
-endif
+# what does this do
+#libretro_all: all
+#ifeq ($(platform),ios)
+#ifeq ($(USE_DYNAREC),1)
+#	make -f Makefile.libretro USE_DYNAREC=0 platform=$(platform) clean
+#	make -f Makefile.libretro USE_DYNAREC=0 platform=$(platform)
+#endif
+#endif
 
 include Makefile
 
