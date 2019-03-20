@@ -483,6 +483,13 @@ void retro_set_environment(retro_environment_t cb)
       { "pcsx_rearmed_negcon_response", "NegCon Twist Response; linear|quadratic|cubic" },
       { "pcsx_rearmed_vibration", "Enable Vibration; enabled|disabled" },
       { "pcsx_rearmed_dithering", "Enable Dithering; enabled|disabled" },
+#ifdef GPU_UNAI
+      { "pcsx_rearmed_blending", "Enable Blending; enabled|disabled" },
+      { "pcsx_rearmed_lighting", "Enable Lighting; enabled|disabled" },
+      { "pcsx_rearmed_fast_lighting", "Enable Fast Lighting; enabled|disabled" },
+      { "pcsx_rearmed_ilace_force", "Enable Forced Interlace; disabled|enabled" },
+      { "pcsx_rearmed_pixel_skip", "Enable Pixel Skip; enabled|disabled" },
+#endif
 #ifndef DRC_DISABLE
       { "pcsx_rearmed_drc", "Dynamic recompiler; enabled|disabled" },
 #ifdef HAVE_PRE_ARMV7
@@ -1432,6 +1439,7 @@ static void update_variables(bool in_flight)
       if (strcmp(var.value, "disabled") == 0) {
          pl_rearmed_cbs.gpu_peops.iUseDither = 0;
          pl_rearmed_cbs.gpu_peopsgl.bDrawDither = 0;
+         pl_rearmed_cbs.gpu_unai.dithering = 0;
 #ifdef __ARM_NEON__
          pl_rearmed_cbs.gpu_neon.allow_dithering = 0;
 #endif
@@ -1439,11 +1447,69 @@ static void update_variables(bool in_flight)
       else if (strcmp(var.value, "enabled") == 0) {
          pl_rearmed_cbs.gpu_peops.iUseDither = 1;
          pl_rearmed_cbs.gpu_peopsgl.bDrawDither = 1;
+         pl_rearmed_cbs.gpu_unai.dithering = 1;
 #ifdef __ARM_NEON__
          pl_rearmed_cbs.gpu_neon.allow_dithering = 1;
 #endif
       }
    }
+
+#ifdef GPU_UNAI
+   var.value = "NULL";
+   var.key = "pcsx_rearmed_ilace_force";
+
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) || var.value)
+   {
+      if (strcmp(var.value, "disabled") == 0)
+         pl_rearmed_cbs.gpu_unai.ilace_force = 0;
+      else if (strcmp(var.value, "enabled") == 0)
+         pl_rearmed_cbs.gpu_unai.ilace_force = 1;
+   }
+
+   var.value = "NULL";
+   var.key = "pcsx_rearmed_pixel_skip";
+
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) || var.value)
+   {
+      if (strcmp(var.value, "disabled") == 0)
+         pl_rearmed_cbs.gpu_unai.pixel_skip = 0;
+      else if (strcmp(var.value, "enabled") == 0)
+         pl_rearmed_cbs.gpu_unai.pixel_skip = 1;
+   }
+
+   var.value = "NULL";
+   var.key = "pcsx_rearmed_lighting";
+
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) || var.value)
+   {
+      if (strcmp(var.value, "disabled") == 0)
+         pl_rearmed_cbs.gpu_unai.lighting = 0;
+      else if (strcmp(var.value, "enabled") == 0)
+         pl_rearmed_cbs.gpu_unai.lighting = 1;
+   }
+
+   var.value = "NULL";
+   var.key = "pcsx_rearmed_fast_lighting";
+
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) || var.value)
+   {
+      if (strcmp(var.value, "disabled") == 0)
+         pl_rearmed_cbs.gpu_unai.fast_lighting = 0;
+      else if (strcmp(var.value, "enabled") == 0)
+         pl_rearmed_cbs.gpu_unai.fast_lighting = 1;
+   }
+
+   var.value = "NULL";
+   var.key = "pcsx_rearmed_blending";
+
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) || var.value)
+   {
+      if (strcmp(var.value, "disabled") == 0)
+         pl_rearmed_cbs.gpu_unai.blending = 0;
+      else if (strcmp(var.value, "enabled") == 0)
+         pl_rearmed_cbs.gpu_unai.blending = 1;
+   }
+#endif // GPU_UNAI
 
 #ifdef __ARM_NEON__
    var.value = "NULL";
