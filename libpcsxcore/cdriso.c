@@ -27,7 +27,9 @@
 
 #include <errno.h>
 #include <zlib.h>
+#ifdef HAVE_CHD
 #include <chd.h>
+#endif
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -94,6 +96,7 @@ static struct {
 	unsigned int sector_in_blk;
 } *compr_img;
 
+#ifdef HAVE_CHD
 static struct {
 	unsigned char (*buffer)[CD_FRAMESIZE_RAW + SUB_FRAMESIZE];
 	chd_file* chd;
@@ -102,6 +105,7 @@ static struct {
 	unsigned int current_hunk;
 	unsigned int sector_in_hunk;
 } *chd_img;
+#endif
 
 int (*cdimg_read_func)(FILE *f, unsigned int base, void *dest, int sector);
 
@@ -1039,6 +1043,7 @@ fail_io:
 	return -1;
 }
 
+#ifdef HAVE_CHD
 static int handlechd(const char *isofile) {
 	chd_img = calloc(1, sizeof(*chd_img));
 	if (chd_img == NULL)
@@ -1059,7 +1064,7 @@ static int handlechd(const char *isofile) {
    cddaBigEndian = TRUE;
 
 	numtracks = 0;
-	int frame_offset = 0;
+	int frame_offset = 150;
 	memset(ti, 0, sizeof(ti));
 
    while (1)
@@ -1087,14 +1092,14 @@ static int handlechd(const char *isofile) {
 		ti[md.track].type = !strncmp(md.type, "AUDIO", 5) ? CDDA : DATA;
 
       sec2msf(frame_offset + md.pregap, ti[md.track].start);
-      sec2msf(md.frames, ti[md.track].length);
+      sec2msf(md.frames - md.pregap, ti[md.track].length);
 
       if (!strcmp(md.type, md.pgtype))
          frame_offset += md.pregap;
 
       ti[md.track].start_offset = frame_offset * CD_FRAMESIZE_RAW;
 
-		frame_offset += (md.frames + 3) & ~3;
+		frame_offset += md.frames;
 		frame_offset += md.postgap;
 		numtracks++;
 	}
@@ -1110,6 +1115,7 @@ fail_io:
 	}
 	return -1;
 }
+#endif
 
 // this function tries to get the .sub file of the given .img
 static int opensubfile(const char *isoname) {
@@ -1272,6 +1278,7 @@ finish:
 	return CD_FRAMESIZE_RAW;
 }
 
+#ifdef HAVE_CHD
 static int cdread_chd(FILE *f, unsigned int base, void *dest, int sector)
 {
 	int hunk;
@@ -1295,7 +1302,7 @@ finish:
 			CD_FRAMESIZE_RAW);
 	return CD_FRAMESIZE_RAW;
 }
-
+#endif
 static int cdread_2048(FILE *f, unsigned int base, void *dest, int sector)
 {
 	int ret;
@@ -1315,9 +1322,11 @@ static unsigned char * CALLBACK ISOgetBuffer_compr(void) {
 	return compr_img->buff_raw[compr_img->sector_in_blk] + 12;
 }
 
+#ifdef HAVE_CHD
 static unsigned char * CALLBACK ISOgetBuffer_chd(void) {
 	return chd_img->buffer[chd_img->sector_in_hunk] + 12;
 }
+#endif
 
 static unsigned char * CALLBACK ISOgetBuffer(void) {
 	return cdbuffer + 12;
@@ -1386,11 +1395,13 @@ static long CALLBACK ISOopen(void) {
 		CDR_getBuffer = ISOgetBuffer_compr;
 		cdimg_read_func = cdread_compressed;
 	}
+#ifdef HAVE_CHD
 	else if (handlechd(GetIsoFile()) == 0) {
 		SysPrintf("[chd]");
 		CDR_getBuffer = ISOgetBuffer_chd;
 		cdimg_read_func = cdread_chd;
 	}
+#endif
 
 	if (!subChanMixed && opensubfile(GetIsoFile()) == 0) {
 		SysPrintf("[+sub]");
@@ -1479,12 +1490,14 @@ static long CALLBACK ISOclose(void) {
 		compr_img = NULL;
 	}
 
+#ifdef HAVE_CHD
 	if (chd_img != NULL) {
 		chd_close(chd_img->chd);
 		free(chd_img->buffer);
 		free(chd_img);
 		chd_img = NULL;
 	}
+#endif
 
 	for (i = 1; i <= numtracks; i++) {
 		if (ti[i].handle != NULL) {
