@@ -12,7 +12,9 @@
 #include <strings.h>
 #ifdef __MACH__
 #include <unistd.h>
+#ifndef IOS_TVOS
 #include <sys/syscall.h>
+#endif
 #endif
 
 #include "../libpcsxcore/misc.h"
@@ -2203,8 +2205,10 @@ void retro_init(void)
 	int ret;
 
 #ifdef __MACH__
+#ifndef IOS_TVOS
 	// magic sauce to make the dynarec work on iOS
 	syscall(SYS_ptrace, 0 /*PTRACE_TRACEME*/, 0, 0, 0);
+#endif
 #endif
 
 #ifdef _3DS
