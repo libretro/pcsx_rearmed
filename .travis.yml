@@ -1,8 +1,26 @@
-language: cpp
-compiler:
-  - gcc
-  - clang
-before_install:
-  - sudo apt-get update -qq
-  - sudo apt-get install -y libsdl1.2-dev libasound2-dev libpng-dev libz-dev
-script: ./configure --platform=libretro && make
+sudo: required
+
+language: minimal
+
+env:
+  global:
+    - IMAGE=registry.gitlab.com/bleemsync-dev/docker-autodevops-buildenvs/mmc-crosscompiler-docker-image:latest_internal
+    - TARGETBUILD=pcsx_rearmed_libretro
+  matrix:
+    - TARGET=nesc CLOUD_DIR=NESC
+    - TARGET=psc CLOUD_DIR=PSC
+
+services:
+  - docker
+
+before_script:
+  - docker login -u ${GITLAB_USER} -p ${GITLAB_PASS} registry.gitlab.com
+  - docker pull ${IMAGE}
+  - docker run -it -d --name crosscomp ${IMAGE} bash
+  - docker exec -it crosscomp bash -c "git clone --depth=50 --branch=master https://github.com/${TRAVIS_REPO_SLUG} ${TRAVIS_REPO_SLUG}"
+
+script:
+  - docker exec -it crosscomp bash -c "cd ${TRAVIS_REPO_SLUG} && classic_make_${TARGET} Makefile.libretro clean"
+  - docker exec -it crosscomp bash -c "cd ${TRAVIS_REPO_SLUG} && classic_make_${TARGET} Makefile.libretro"
+  - docker exec -it crosscomp bash -c "chown 600 ~/.keys/release_private_key.pem"
+  - docker exec -it crosscomp bash -c "cd ${TRAVIS_REPO_SLUG} && echo -e  'cd /var/www/html/cores/Automated_Builds/${CLOUD_DIR}\nput ${TARGETBUILD}.so' | sftp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i ~/.keys/release_private_key.pem docker@classicmodscloud.com"
