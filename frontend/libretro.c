@@ -1779,7 +1779,11 @@ static void update_variables(bool in_flight)
          Config.Cpu = CPU_INTERPRETER;
       else
 #endif
+#ifdef LIGHTREC
+      if (strcmp(var.value, "disabled") == 0 || !found_bios)
+#else
       if (strcmp(var.value, "disabled") == 0)
+#endif
          Config.Cpu = CPU_INTERPRETER;
       else if (strcmp(var.value, "enabled") == 0)
          Config.Cpu = CPU_DYNAREC;
