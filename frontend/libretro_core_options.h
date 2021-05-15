@@ -159,9 +159,9 @@ struct retro_core_option_definition option_defs_us[] = {
    {
       "pcsx_rearmed_multitap",
       "Multitap Mode (Restart)",
-      "Sets the multitap device in either port 1 or port 2 allowing support of upto 5 players, or on both for 8 players.",
+      "Sets the multitap device in either port 1 or port 2 allowing support of upto 5 players, or on both for 8 players. Leave it at setting disabled for non-multiplayer games.",
       {
-         { "disable",     NULL },
+         { "disabled",    NULL },
          { "port 1 only", NULL },
          { "port 2 only", NULL },
          { "both",        NULL },
