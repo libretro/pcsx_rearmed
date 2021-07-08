@@ -1195,7 +1195,84 @@ static void set_retro_memmap(void)
 #endif
 }
 
+static int init_memcards(void);
+static void loadPSXBios(void);
 static void update_variables(bool in_flight);
+
+static bool pcsx_init(void)
+{
+   int ret = false;
+
+#if defined(__MACH__) && !defined(TVOS)
+   // magic sauce to make the dynarec work on iOS
+   syscall(SYS_ptrace, 0 /*PTRACE_TRACEME*/, 0, 0, 0);
+#endif
+
+#ifdef _3DS
+   psxMapHook = pl_3ds_mmap;
+   psxUnmapHook = pl_3ds_munmap;
+#endif
+
+#ifdef VITA
+   if (init_vita_mmap() < 0)
+      abort();
+   psxMapHook = pl_vita_mmap;
+   psxUnmapHook = pl_vita_munmap;
+#endif
+
+   ret = emu_core_preinit();
+
+#ifdef _3DS
+   /* emu_core_preinit sets the cpu to dynarec */
+   if (!__ctr_svchax)
+      Config.Cpu = CPU_INTERPRETER;
+#endif
+
+   ret |= init_memcards();
+
+   ret |= emu_core_init();
+
+   if (ret != 0)
+   {
+      SysPrintf("PCSX init failed.\n");
+      return false;
+   }
+
+#ifdef _3DS
+   vout_buf = linearMemAlign(VOUT_MAX_WIDTH * VOUT_MAX_HEIGHT * 2, 0x80);
+#elif defined(_POSIX_C_SOURCE) && (_POSIX_C_SOURCE >= 200112L) && !defined(VITA) && !defined(__SWITCH__)
+   posix_memalign(&vout_buf, 16, VOUT_MAX_WIDTH * VOUT_MAX_HEIGHT * 2);
+#else
+   vout_buf = malloc(VOUT_MAX_WIDTH * VOUT_MAX_HEIGHT * sizeof(uint32_t));
+#endif
+
+   if (!vout_buf)
+      return false;
+
+   vout_buf_ptr = vout_buf;
+
+   loadPSXBios();
+
+   /* Set how much slower PSX CPU runs * 100 (so that 200 is 2 times)
+    * we have to do this because cache misses and some IO penalties
+    * are not emulated. Warning: changing this may break compatibility. */
+   cycle_multiplier = 175;
+#if defined(HAVE_PRE_ARMV7) && !defined(_3DS)
+   cycle_multiplier = 200;
+#endif
+   pl_rearmed_cbs.gpu_peops.iUseDither = 1;
+   pl_rearmed_cbs.gpu_peops.dwActFixes = GPU_PEOPS_OLD_FRAME_SKIP;
+   spu_config.iUseFixedUpdates = 1;
+
+   SaveFuncs.open = save_open;
+   SaveFuncs.read = save_read;
+   SaveFuncs.write = save_write;
+   SaveFuncs.seek = save_seek;
+   SaveFuncs.close = save_close;
+
+   return true;
+}
+
 bool retro_load_game(const struct retro_game_info *info)
 {
    size_t i;
@@ -1254,6 +1331,9 @@ bool retro_load_game(const struct retro_game_info *info)
       SysPrintf("info->path required\n");
       return false;
    }
+
+   if (!pcsx_init())
+      return false;
 
    update_variables(false);
 
@@ -2736,52 +2816,9 @@ void retro_init(void)
 {
    unsigned dci_version = 0;
    struct retro_rumble_interface rumble;
-   int ret;
 
    msg_interface_version = 0;
    environ_cb(RETRO_ENVIRONMENT_GET_MESSAGE_INTERFACE_VERSION, &msg_interface_version);
-
-#if defined(__MACH__) && !defined(TVOS)
-   // magic sauce to make the dynarec work on iOS
-   syscall(SYS_ptrace, 0 /*PTRACE_TRACEME*/, 0, 0, 0);
-#endif
-
-#ifdef _3DS
-   psxMapHook = pl_3ds_mmap;
-   psxUnmapHook = pl_3ds_munmap;
-#endif
-#ifdef VITA
-   if (init_vita_mmap() < 0)
-      abort();
-   psxMapHook = pl_vita_mmap;
-   psxUnmapHook = pl_vita_munmap;
-#endif
-   ret = emu_core_preinit();
-#ifdef _3DS
-   /* emu_core_preinit sets the cpu to dynarec */
-   if (!__ctr_svchax)
-      Config.Cpu = CPU_INTERPRETER;
-#endif
-   ret |= init_memcards();
-
-   ret |= emu_core_init();
-   if (ret != 0)
-   {
-      SysPrintf("PCSX init failed.\n");
-      exit(1);
-   }
-
-#ifdef _3DS
-   vout_buf = linearMemAlign(VOUT_MAX_WIDTH * VOUT_MAX_HEIGHT * 2, 0x80);
-#elif defined(_POSIX_C_SOURCE) && (_POSIX_C_SOURCE >= 200112L) && !defined(VITA) && !defined(__SWITCH__)
-   posix_memalign(&vout_buf, 16, VOUT_MAX_WIDTH * VOUT_MAX_HEIGHT * 2);
-#else
-   vout_buf = malloc(VOUT_MAX_WIDTH * VOUT_MAX_HEIGHT * 2);
-#endif
-
-   vout_buf_ptr = vout_buf;
-
-   loadPSXBios();
 
    environ_cb(RETRO_ENVIRONMENT_GET_CAN_DUPE, &vout_can_dupe);
 
@@ -2795,23 +2832,6 @@ void retro_init(void)
    rumble_cb = NULL;
    if (environ_cb(RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE, &rumble))
       rumble_cb = rumble.set_rumble_state;
-
-   /* Set how much slower PSX CPU runs * 100 (so that 200 is 2 times)
-    * we have to do this because cache misses and some IO penalties
-    * are not emulated. Warning: changing this may break compatibility. */
-   cycle_multiplier = 175;
-#if defined(HAVE_PRE_ARMV7) && !defined(_3DS)
-   cycle_multiplier = 200;
-#endif
-   pl_rearmed_cbs.gpu_peops.iUseDither = 1;
-   pl_rearmed_cbs.gpu_peops.dwActFixes = GPU_PEOPS_OLD_FRAME_SKIP;
-   spu_config.iUseFixedUpdates = 1;
-
-   SaveFuncs.open = save_open;
-   SaveFuncs.read = save_read;
-   SaveFuncs.write = save_write;
-   SaveFuncs.seek = save_seek;
-   SaveFuncs.close = save_close;
 
    if (environ_cb(RETRO_ENVIRONMENT_GET_INPUT_BITMASKS, NULL))
       libretro_supports_bitmasks = true;
@@ -2827,11 +2847,15 @@ void retro_deinit(void)
       plugins_opened = 0;
    }
    SysClose();
+
+   if (vout_buf)
+   {
 #ifdef _3DS
-   linearFree(vout_buf);
+      linearFree(vout_buf);
 #else
-   free(vout_buf);
+      free(vout_buf);
 #endif
+   }
    vout_buf = NULL;
 
 #ifdef VITA
