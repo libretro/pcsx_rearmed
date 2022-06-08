@@ -28,6 +28,7 @@
 #include "gpu.h"
 #include "ppf.h"
 #include "database.h"
+#include "lightrec/plugin.h"
 #include <zlib.h>
 
 char CdromId[10] = "";
@@ -254,7 +255,7 @@ int LoadCdrom() {
 		incTime();
 		READTRACK();
 
-		if (ptr != NULL) memcpy(ptr, buf+12, 2048);
+		if (ptr != INVALID_PTR) memcpy(ptr, buf+12, 2048);
 
 		tmpHead.t_size -= 2048;
 		tmpHead.t_addr += 2048;
@@ -300,7 +301,7 @@ int LoadCdromFile(const char *filename, EXE_HEADER *head) {
 		READTRACK();
 
 		mem = PSXM(addr);
-		if (mem)
+		if (mem != INVALID_PTR)
 			memcpy(mem, buf + 12, 2048);
 
 		size -= 2048;
@@ -489,7 +490,7 @@ int Load(const char *ExePath) {
 				section_address = SWAP32(tmpHead.t_addr);
 				section_size = SWAP32(tmpHead.t_size);
 				mem = PSXM(section_address);
-				if (mem != NULL) {
+				if (mem != INVALID_PTR) {
 					fseek(tmpFile, 0x800, SEEK_SET);
 					fread_to_ram(mem, section_size, 1, tmpFile);
 					psxCpu->Clear(section_address, section_size / 4);
@@ -518,7 +519,7 @@ int Load(const char *ExePath) {
 							EMU_LOG("Loading %08X bytes from %08X to %08X\n", section_size, ftell(tmpFile), section_address);
 #endif
 							mem = PSXM(section_address);
-							if (mem != NULL) {
+							if (mem != INVALID_PTR) {
 								fread_to_ram(mem, section_size, 1, tmpFile);
 								psxCpu->Clear(section_address, section_size / 4);
 							}
@@ -615,6 +616,9 @@ int SaveState(const char *file) {
 
 	new_dyna_before_save();
 
+	if (drc_is_lightrec() && Config.Cpu != CPU_INTERPRETER)
+		lightrec_plugin_prepare_save_state();
+
 	SaveFuncs.write(f, (void *)PcsxHeader, 32);
 	SaveFuncs.write(f, (void *)&SaveVersion, sizeof(u32));
 	SaveFuncs.write(f, (void *)&Config.HLE, sizeof(boolean));
@@ -690,12 +694,8 @@ int LoadState(const char *file) {
 	if (Config.HLE)
 		psxBiosInit();
 
-#if defined(LIGHTREC)
-	if (Config.Cpu != CPU_INTERPRETER)
-		psxCpu->Clear(0, UINT32_MAX); //clear all
-	else
-#endif
-	psxCpu->Reset();
+	if (!drc_is_lightrec() || Config.Cpu == CPU_INTERPRETER)
+		psxCpu->Reset();
 	SaveFuncs.seek(f, 128 * 96 * 3, SEEK_CUR);
 
 	SaveFuncs.read(f, psxM, 0x00200000);
@@ -703,6 +703,9 @@ int LoadState(const char *file) {
 	SaveFuncs.read(f, psxH, 0x00010000);
 	SaveFuncs.read(f, &psxRegs, offsetof(psxRegisters, gteBusyCycle));
 	psxRegs.gteBusyCycle = psxRegs.cycle;
+
+	if (drc_is_lightrec() && Config.Cpu != CPU_INTERPRETER)
+		lightrec_plugin_prepare_load_state();
 
 	if (Config.HLE)
 		psxBiosFreeze(0);

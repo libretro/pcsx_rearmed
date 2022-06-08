@@ -15,6 +15,13 @@
 
 #include "../frontend/main.h"
 
+#include "mem.h"
+#include "plugin.h"
+
+#if (defined(__arm__) || defined(__aarch64__)) && !defined(ALLOW_LIGHTREC_ON_ARM)
+#error "Lightrec should not be used on ARM (please specify DYNAREC=ari64 to make)"
+#endif
+
 #define ARRAY_SIZE(x) (sizeof(x) ? sizeof(x) / sizeof((x)[0]) : 0)
 
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
@@ -285,6 +292,9 @@ static struct lightrec_mem_map lightrec_map[] = {
 		.length = 0x200000,
 		.mirror_of = &lightrec_map[PSX_MAP_KERNEL_USER_RAM],
 	},
+	[PSX_MAP_CODE_BUFFER] = {
+		.length = CODE_BUFFER_SIZE,
+	},
 };
 
 static void lightrec_enable_ram(struct lightrec_state *state, bool enable)
@@ -306,6 +316,13 @@ static int lightrec_plugin_init(void)
 	lightrec_map[PSX_MAP_BIOS].address = psxR;
 	lightrec_map[PSX_MAP_SCRATCH_PAD].address = psxH;
 	lightrec_map[PSX_MAP_PARALLEL_PORT].address = psxP;
+
+	if (LIGHTREC_CUSTOM_MAP) {
+		lightrec_map[PSX_MAP_MIRROR1].address = psxM + 0x200000;
+		lightrec_map[PSX_MAP_MIRROR2].address = psxM + 0x400000;
+		lightrec_map[PSX_MAP_MIRROR3].address = psxM + 0x600000;
+		lightrec_map[PSX_MAP_CODE_BUFFER].address = code_buffer;
+	}
 
 	lightrec_debug = !!getenv("LIGHTREC_DEBUG");
 	lightrec_very_debug = !!getenv("LIGHTREC_VERY_DEBUG");
@@ -548,6 +565,28 @@ static void lightrec_plugin_reset(void)
 	regs->cp0[15] = 0x00000002; // PRevID = Revision ID, same as R3000A
 
 	booting = true;
+}
+
+void lightrec_plugin_prepare_load_state(void)
+{
+	struct lightrec_registers *regs;
+
+	regs = lightrec_get_registers(lightrec_state);
+	memcpy(regs->cp2d, &psxRegs.CP2, sizeof(regs->cp2d) + sizeof(regs->cp2c));
+	memcpy(regs->cp0, &psxRegs.CP0, sizeof(regs->cp0));
+	memcpy(regs->gpr, &psxRegs.GPR, sizeof(regs->gpr));
+
+	lightrec_invalidate_all(lightrec_state);
+}
+
+void lightrec_plugin_prepare_save_state(void)
+{
+	struct lightrec_registers *regs;
+
+	regs = lightrec_get_registers(lightrec_state);
+	memcpy(&psxRegs.CP2, regs->cp2d, sizeof(regs->cp2d) + sizeof(regs->cp2c));
+	memcpy(&psxRegs.CP0, regs->cp0, sizeof(regs->cp0));
+	memcpy(&psxRegs.GPR, regs->gpr, sizeof(regs->gpr));
 }
 
 R3000Acpu psxRec =

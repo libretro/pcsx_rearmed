@@ -28,6 +28,7 @@ CC_AS ?= $(CC)
 CFLAGS ?=
 
 TARGET_NAME := pcsx_rearmed
+ARCH_DETECTED := $(shell $(CC) -dumpmachine | awk -F- '{print $$1}')
 GIT_VERSION := " $(shell git rev-parse --short HEAD || echo unknown)"
 ifneq ($(GIT_VERSION)," unknown")
 	CFLAGS += -DGIT_VERSION=\"$(GIT_VERSION)\"
@@ -50,12 +51,17 @@ ifeq ($(platform), unix)
 	TARGET := $(TARGET_NAME)_libretro.so
 	fpic := -fPIC
 	THREAD_RENDERING = 1
+ifeq ($(shell uname),Linux)
+	LIGHTREC_CUSTOM_MAP := 1
+endif
 ifneq ($(findstring SunOS,$(shell uname -s)),)
 	CC = gcc
 endif
-ifeq ($(ARCH), arm)
+ifneq (,$(findstring $(ARCH_DETECTED),arm aarch64))
+	DYNAREC = ari64
+
 ifneq ($(findstring __thumb__,$(shell $(CC) -E -dD $(CFLAGS) include/arm_features.h)),)
-	# must disable thumb as recompiler can't handle it
+	# must disable thumb as ari64 can't handle it
 	CFLAGS += -marm
 endif
 endif
@@ -66,6 +72,7 @@ else ifneq (,$(findstring CortexA73_G12B,$(platform)))
 	fpic := -fPIC
 	SHARED := -shared -Wl,-version-script=link.T
 	ARCH = arm64
+	DYNAREC ?= ari64
 	CFLAGS += -fomit-frame-pointer -ffast-math -DARM
 	CPUFLAGS += -march=armv8-a+crc -mfpu=neon-fp-armv8 -mcpu=cortex-a73 -mtune=cortex-a73.cortex-a53
 
@@ -88,6 +95,7 @@ else ifeq ($(platform), linux-portable)
 	LIBDL :=
 	LIBM :=
 	NO_UNDEF_CHECK = 1
+	LIGHTREC_CUSTOM_MAP := 1
 
 # OS X
 else ifeq ($(platform), osx)
@@ -198,6 +206,7 @@ else ifeq ($(platform), libnx)
 else ifeq ($(platform), arm64)
    TARGET := $(TARGET_NAME)_libretro.so
    ARCH := arm64
+   DYNAREC = ari64
    BUILTIN_GPU = unai
    fpic := -fPIC
    CFLAGS := $(filter-out -O2, $(CFLAGS))
@@ -493,13 +502,16 @@ endif
 
 # try to autodetect stuff for the lazy
 ifndef ARCH
-ARCH = $(shell $(CC) -dumpmachine | awk -F- '{print $$1}')
+ARCH = $(ARCH_DETECTED)
 endif
 ifndef HAVE_NEON
 HAVE_NEON = $(shell $(CC) -E -dD - < /dev/null 2> /dev/null | grep -q __ARM_NEON__ && echo 1 || echo 0)
 endif
 ifeq ($(NO_UNDEF_CHECK)$(shell ld -v 2> /dev/null | awk '{print $$1}'),GNU)
 MAIN_LDFLAGS += -Wl,--no-undefined
+endif
+ifdef ALLOW_LIGHTREC_ON_ARM
+CFLAGS += -DALLOW_LIGHTREC_ON_ARM
 endif
 
 TARGET ?= libretro.so

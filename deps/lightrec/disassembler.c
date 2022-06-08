@@ -104,10 +104,17 @@ static const char *opcode_flags[] = {
 };
 
 static const char *opcode_io_flags[] = {
-	"memory I/O",
-	"hardware I/O",
 	"self-modifying code",
 	"no invalidation",
+	"no mask",
+};
+
+static const char *opcode_io_modes[] = {
+	"Memory access",
+	"I/O access",
+	"RAM access",
+	"BIOS access",
+	"Scratchpad access",
 };
 
 static const char *opcode_branch_flags[] = {
@@ -122,10 +129,11 @@ static const char *opcode_multdiv_flags[] = {
 };
 
 static int print_flags(char *buf, size_t len, u16 flags,
-		       const char **array, size_t array_size)
+		       const char **array, size_t array_size,
+		       bool is_io)
 {
-	const char *flag_name;
-	unsigned int i;
+	const char *flag_name, *io_mode_name;
+	unsigned int i, io_mode;
 	size_t count = 0, bytes;
 	bool first = true;
 
@@ -147,6 +155,23 @@ static int print_flags(char *buf, size_t len, u16 flags,
 		buf += bytes;
 		len -= bytes;
 		count += bytes;
+	}
+
+	if (is_io) {
+		io_mode = LIGHTREC_FLAGS_GET_IO_MODE(flags);
+		if (io_mode > 0) {
+			io_mode_name = opcode_io_modes[io_mode - 1];
+
+			if (first)
+				bytes = snprintf(buf, len, "(%s", io_mode_name);
+			else
+				bytes = snprintf(buf, len, ", %s", io_mode_name);
+
+			first = false;
+			buf += bytes;
+			len -= bytes;
+			count += bytes;
+		}
 	}
 
 	if (!first)
@@ -188,6 +213,9 @@ static int print_op_special(union code c, char *buf, size_t len,
 				lightrec_reg_name(c.r.rt),
 				lightrec_reg_name(c.r.rs));
 	case OP_SPECIAL_JR:
+		*flags_ptr = opcode_branch_flags;
+		*nb_flags = ARRAY_SIZE(opcode_branch_flags);
+		fallthrough;
 	case OP_SPECIAL_MTHI:
 	case OP_SPECIAL_MTLO:
 		return snprintf(buf, len, "%s%s",
@@ -257,7 +285,8 @@ static int print_op_cp(union code c, char *buf, size_t len, unsigned int cp)
 }
 
 static int print_op(union code c, u32 pc, char *buf, size_t len,
-		    const char ***flags_ptr, size_t *nb_flags)
+		    const char ***flags_ptr, size_t *nb_flags,
+		    bool *is_io)
 {
 	if (c.opcode == 0)
 		return snprintf(buf, len, "nop     ");
@@ -274,6 +303,8 @@ static int print_op(union code c, u32 pc, char *buf, size_t len,
 				pc + 4 + ((s16)c.i.imm << 2));
 	case OP_J:
 	case OP_JAL:
+		*flags_ptr = opcode_branch_flags;
+		*nb_flags = ARRAY_SIZE(opcode_branch_flags);
 		return snprintf(buf, len, "%s0x%x",
 				std_opcodes[c.i.op],
 				(pc & 0xf0000000) | (c.j.imm << 2));
@@ -324,6 +355,7 @@ static int print_op(union code c, u32 pc, char *buf, size_t len,
 	case OP_SWR:
 		*flags_ptr = opcode_io_flags;
 		*nb_flags = ARRAY_SIZE(opcode_io_flags);
+		*is_io = true;
 		return snprintf(buf, len, "%s%s,%hd(%s)",
 				std_opcodes[c.i.op],
 				lightrec_reg_name(c.i.rt),
@@ -355,34 +387,38 @@ static int print_op(union code c, u32 pc, char *buf, size_t len,
 	}
 }
 
-void lightrec_print_disassembly(const struct block *block, const u32 *code)
+void lightrec_print_disassembly(const struct block *block, const u32 *code_ptr)
 {
 	const struct opcode *op;
 	const char **flags_ptr;
 	size_t nb_flags, count, count2;
 	char buf[256], buf2[256], buf3[256];
 	unsigned int i;
-	u32 pc, branch_pc;
+	u32 pc, branch_pc, code;
+	bool is_io;
 
 	for (i = 0; i < block->nb_ops; i++) {
 		op = &block->opcode_list[i];
 		branch_pc = get_branch_pc(block, i, 0);
 		pc = block->pc + (i << 2);
+		code = LE32TOH(code_ptr[i]);
 
-		count = print_op((union code)code[i], pc, buf, sizeof(buf),
-				 &flags_ptr, &nb_flags);
+		count = print_op((union code)code, pc, buf, sizeof(buf),
+				 &flags_ptr, &nb_flags, &is_io);
 
 		flags_ptr = NULL;
 		nb_flags = 0;
+		is_io = false;
 		count2 = print_op(op->c, branch_pc, buf2, sizeof(buf2),
-				  &flags_ptr, &nb_flags);
+				  &flags_ptr, &nb_flags, &is_io);
 
-		if (code[i] == op->c.opcode) {
+		if (code == op->c.opcode) {
 			*buf2 = '\0';
 			count2 = 0;
 		}
 
-		print_flags(buf3, sizeof(buf3), op->flags, flags_ptr, nb_flags);
+		print_flags(buf3, sizeof(buf3), op->flags, flags_ptr, nb_flags,
+			    is_io);
 
 		printf("0x%08x (0x%x)\t%s%*c%s%*c%s\n", pc, i << 2,
 		       buf, 30 - (int)count, ' ', buf2, 30 - (int)count2, ' ', buf3);

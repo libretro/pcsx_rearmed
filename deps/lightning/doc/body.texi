@@ -89,7 +89,11 @@ assembles machine instructions without further tests.
 @node Installation
 @chapter Configuring and installing @lightning{}
 
-The first thing to do to use @lightning{} is to configure the
+Here we will assume that your system already has the dependencies
+necessary to build @lightning{}. For more on dependencies, see
+@lightning{}'s @file{README-hacking} file.
+
+The first thing to do to build @lightning{} is to configure the
 program, picking the set of macros to be used on the host
 architecture; this configuration is automatically performed by
 the @file{configure} shell script; to run it, merely type:
@@ -244,6 +248,8 @@ lshr                 O1 = O2 << O3
 lshi                 O1 = O2 << O3
 rshr     _u          O1 = O2 >> O3@footnote{The sign bit is propagated unless using the @code{_u} modifier.}
 rshi     _u          O1 = O2 >> O3@footnote{The sign bit is propagated unless using the @code{_u} modifier.}
+movzr                O1 = O3 ? O1 : O2
+movnr                O1 = O3 ? O2 : O1
 @end example
 
 @item Four operand binary ALU operations
@@ -364,6 +370,14 @@ The @code{_ul} variant is only available in 64-bit architectures.
 @example
 htonr    _us _ui _ul @r{Host-to-network (big endian) order}
 ntohr    _us _ui _ul @r{Network-to-host order }
+@end example
+
+@code{bswapr} can be used to unconditionally byte-swap an operand.
+On little-endian architectures, @code{htonr} and @code{ntohr} resolve
+to this.
+The @code{_ul} variant is only available in 64-bit architectures.
+@example
+bswapr    _us _ui _ul  01 = byte_swap(02)
 @end example
 
 @item Load operations
