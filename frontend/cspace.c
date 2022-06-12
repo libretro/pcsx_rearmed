@@ -15,26 +15,35 @@
  * in favor of NEON version or platform-specific conversion
  */
 
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define SWAP16(x) __builtin_bswap16(x)
+#define LE16TOHx2(x) ((SWAP16((x) >> 16) << 16) | SWAP16(x))
+#else
+#define LE16TOHx2(x) (x)
+#endif
+
 #ifndef __arm__
 
 void bgr555_to_rgb565(void *dst_, const void *src_, int bytes)
 {
-	const unsigned int *src = src_;
-	unsigned int *dst = dst_;
-	unsigned int p;
-	int x;
+    const unsigned int *src = src_;
+    unsigned int *dst = dst_;
+    unsigned int x, p, r, g, b;
 
-	for (x = 0; x < bytes / 4; x++) {
-		p = src[x];
-		p = ((p & 0x7c007c00) >> 10) | ((p & 0x03e003e0) << 1)
-			| ((p & 0x001f001f) << 11);
-		dst[x] = p;
-	}
+    for (x = 0; x < bytes / 4; x++) {
+        p = LE16TOHx2(src[x]);
+
+        r = (p & 0x001f001f) << 11;
+        g = (p & 0x03e003e0) << 1;
+        b = (p & 0x7c007c00) >> 10;
+
+        dst[x] = r | g | b;
+    }
 }
 
 #endif
 
-#ifdef __arm64__
+#if defined(__arm64__) || !defined(__ARM_NEON__)
 
 void bgr888_to_rgb565(void *dst_, const void *src_, int bytes)
 {
@@ -49,33 +58,19 @@ void bgr888_to_rgb565(void *dst_, const void *src_, int bytes)
         r2 = src[3] & 0xf8;
         g2 = src[4] & 0xfc;
         b2 = src[5] & 0xf8;
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        *dst = (r1 << 24) | (g1 << 19) | (b1 << 13) |
+               (r2 << 8) | (g2 << 3) | (b2 >> 3);
+#else
         *dst = (r2 << 24) | (g2 << 19) | (b2 << 13) |
                (r1 << 8) | (g1 << 3) | (b1 >> 3);
+#endif
     }
 }
 
 #endif
 
 #ifndef __ARM_NEON__
-
-void bgr888_to_rgb565(void *dst_, const void *src_, int bytes)
-{
-    const unsigned char *src = src_;
-    unsigned int *dst = dst_;
-    unsigned int r1, g1, b1, r2, g2, b2;
-
-    for (; bytes >= 6; bytes -= 6, src += 6, dst++) {
-        r1 = src[0] & 0xf8;
-        g1 = src[1] & 0xfc;
-        b1 = src[2] & 0xf8;
-        r2 = src[3] & 0xf8;
-        g2 = src[4] & 0xfc;
-        b2 = src[5] & 0xf8;
-        *dst = (r2 << 24) | (g2 << 19) | (b2 << 13) |
-               (r1 << 8) | (g1 << 3) | (b1 >> 3);
-    }
-}
-
 // TODO?
 void rgb888_to_rgb565(void *dst, const void *src, int bytes) {}
 void bgr888_to_rgb888(void *dst, const void *src, int bytes) {}
