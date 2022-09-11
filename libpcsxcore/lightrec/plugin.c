@@ -126,9 +126,11 @@ static void cop2_op(struct lightrec_state *state, u32 func)
 
 static bool has_interrupt(void)
 {
+	struct lightrec_registers *regs = lightrec_get_registers(lightrec_state);
+
 	return ((psxHu32(0x1070) & psxHu32(0x1074)) &&
-	     (psxRegs.CP0.n.Status & 0x401) == 0x401) ||
-	    (psxRegs.CP0.n.Status & psxRegs.CP0.n.Cause & 0x0300);
+		(regs->cp0[12] & 0x401) == 0x401) ||
+		(regs->cp0[12] & regs->cp0[13] & 0x0300);
 }
 
 static void lightrec_restore_state(struct lightrec_state *state)
