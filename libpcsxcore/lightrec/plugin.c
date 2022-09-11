@@ -390,13 +390,13 @@ static int lightrec_plugin_init(void)
 	lightrec_map[PSX_MAP_KERNEL_USER_RAM].address = psxM;
 	lightrec_map[PSX_MAP_BIOS].address = psxR;
 	lightrec_map[PSX_MAP_SCRATCH_PAD].address = psxH;
+	lightrec_map[PSX_MAP_HW_REGISTERS].address = psxH + 0x1000;
 	lightrec_map[PSX_MAP_PARALLEL_PORT].address = psxP;
 
 	if (LIGHTREC_CUSTOM_MAP) {
 		lightrec_map[PSX_MAP_MIRROR1].address = psxM + 0x200000;
 		lightrec_map[PSX_MAP_MIRROR2].address = psxM + 0x400000;
 		lightrec_map[PSX_MAP_MIRROR3].address = psxM + 0x600000;
-		lightrec_map[PSX_MAP_HW_REGISTERS].address = psxH + 0x1000;
 		lightrec_map[PSX_MAP_CODE_BUFFER].address = code_buffer;
 	}
 
