@@ -54,7 +54,6 @@ static char *name = "retroarch.exe";
 static bool use_lightrec_interpreter;
 static bool use_pcsx_interpreter;
 static bool booting;
-static u32 lightrec_begin_cycles;
 
 enum my_cp2_opcodes {
 	OP_CP2_RTPS		= 0x01,
@@ -403,9 +402,6 @@ static int lightrec_plugin_init(void)
 	}
 
 	use_lightrec_interpreter = !!getenv("LIGHTREC_INTERPRETER");
-	if (getenv("LIGHTREC_BEGIN_CYCLES"))
-	  lightrec_begin_cycles = (unsigned int) strtol(
-				  getenv("LIGHTREC_BEGIN_CYCLES"), NULL, 0);
 
 	lightrec_state = lightrec_init(name,
 			lightrec_map, ARRAY_SIZE(lightrec_map),
