@@ -344,7 +344,7 @@ static bool lightrec_can_hw_direct(u32 kaddr, bool is_write, u8 size)
 		case 0x1f801074:
 			return !is_write;
 		default:
-			return is_write || kaddr < 0x1f801c00 || kaddr >= 0x1f801e00;
+			return kaddr < 0x1f801c00 || kaddr >= 0x1f801e00;
 		}
 	default:
 		switch (kaddr) {
