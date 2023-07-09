@@ -27,6 +27,7 @@
 #include "../libpcsxcore/cdriso.h"
 #include "../libpcsxcore/cheat.h"
 #include "../libpcsxcore/r3000a.h"
+#include "../libpcsxcore/lightrec/plugin.h"
 #include "../plugins/dfsound/out.h"
 #include "../plugins/dfsound/spu_config.h"
 #include "../plugins/dfinput/externals.h"
@@ -1953,6 +1954,9 @@ static void update_variables(bool in_flight)
       bool can_use_dynarec = 1;
 #endif
 
+      if (drc_is_lightrec() && Config.Cpu != CPU_INTERPRETER)
+          lightrec_plugin_sync_regs_to_pcsx();
+
 #ifdef _3DS
       if (!__ctr_svchax)
          Config.Cpu = CPU_INTERPRETER;
@@ -1971,6 +1975,9 @@ static void update_variables(bool in_flight)
          psxCpu->Reset(); // not really a reset..
       }
    }
+
+   if (drc_is_lightrec() && Config.Cpu != CPU_INTERPRETER)
+       lightrec_plugin_sync_regs_from_pcsx();
 #endif /* !DRC_DISABLE */
 
    var.value = NULL;

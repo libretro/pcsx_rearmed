@@ -496,13 +496,8 @@ static void lightrec_plugin_execute(void)
 {
 	extern int stop;
 
-	if (!booting)
-		lightrec_plugin_sync_regs_from_pcsx();
-
 	while (!stop)
 		lightrec_plugin_execute_internal(false);
-
-	lightrec_plugin_sync_regs_to_pcsx();
 }
 
 static void lightrec_plugin_execute_block(void)
