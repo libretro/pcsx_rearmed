@@ -52,6 +52,8 @@
 #	define unlikely(x)     (x)
 #endif
 
+#define LIGHTREC_CYCLE_OFFSET 0x80000000
+
 psxRegisters psxRegs;
 Rcnt rcnts[4];
 
@@ -144,8 +146,8 @@ static bool has_interrupt(void)
 
 static void lightrec_tansition_to_pcsx(struct lightrec_state *state)
 {
-	psxRegs.cycle += lightrec_current_cycle_count(state) / 1024;
-	lightrec_reset_cycle_count(state, 0);
+	psxRegs.cycle += (lightrec_current_cycle_count(state) - LIGHTREC_CYCLE_OFFSET) / 1024;
+	lightrec_reset_cycle_count(state, LIGHTREC_CYCLE_OFFSET);
 }
 
 static void lightrec_tansition_from_pcsx(struct lightrec_state *state)
@@ -155,7 +157,7 @@ static void lightrec_tansition_from_pcsx(struct lightrec_state *state)
 	if (block_stepping || cycles_left <= 0 || has_interrupt())
 		lightrec_set_exit_flags(state, LIGHTREC_EXIT_CHECK_INTERRUPT);
 	else {
-		lightrec_set_target_cycle_count(state, cycles_left * 1024);
+		lightrec_set_target_cycle_count(state, LIGHTREC_CYCLE_OFFSET + cycles_left * 1024);
 	}
 }
 
@@ -497,7 +499,8 @@ static void lightrec_plugin_execute_internal(bool block_only)
 	if (use_pcsx_interpreter) {
 		intExecuteBlock(0);
 	} else {
-		u32 cycles_lightrec = cycles_pcsx * 1024;
+		u32 cycles_lightrec = LIGHTREC_CYCLE_OFFSET + cycles_pcsx * 1024;
+
 		if (unlikely(use_lightrec_interpreter)) {
 			psxRegs.pc = lightrec_run_interpreter(lightrec_state,
 							      psxRegs.pc,
