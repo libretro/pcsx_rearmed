@@ -24,7 +24,7 @@
 #define OPT_FLAG_MULT_DIV 1
 #define OPT_EARLY_UNLOAD 1
 #define OPT_PRELOAD_PC 1
-#define OPT_FAST_TIMER 0
+#define OPT_FAST_TIMER 1
 
 #endif /* __LIGHTREC_CONFIG_H__ */
 

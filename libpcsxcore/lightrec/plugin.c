@@ -150,6 +150,23 @@ static void lightrec_tansition_to_pcsx(struct lightrec_state *state)
 	lightrec_reset_cycle_count(state, LIGHTREC_CYCLE_OFFSET);
 }
 
+static void reset_timer_data(struct lightrec_state *state, unsigned int timer)
+{
+	u32 diff = psxRegs.cycle - rcnts[timer].cycleStart;
+	u32 cycleStart = LIGHTREC_CYCLE_OFFSET - diff * 1024;
+	u32 rate = rcnts[timer].rate * 1024;
+
+	lightrec_set_timer_data(state, timer, cycleStart, rate);
+}
+
+static void lightrec_update_timers(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < 3; i++)
+		reset_timer_data(lightrec_state, i);
+}
+
 static void lightrec_tansition_from_pcsx(struct lightrec_state *state)
 {
 	s32 cycles_left = next_interupt - psxRegs.cycle;
@@ -159,6 +176,8 @@ static void lightrec_tansition_from_pcsx(struct lightrec_state *state)
 	else {
 		lightrec_set_target_cycle_count(state, LIGHTREC_CYCLE_OFFSET + cycles_left * 1024);
 	}
+
+	lightrec_update_timers();
 }
 
 static void hw_write_byte(struct lightrec_state *state,
@@ -500,6 +519,8 @@ static void lightrec_plugin_execute_internal(bool block_only)
 		intExecuteBlock(0);
 	} else {
 		u32 cycles_lightrec = LIGHTREC_CYCLE_OFFSET + cycles_pcsx * 1024;
+
+		lightrec_update_timers();
 
 		if (unlikely(use_lightrec_interpreter)) {
 			psxRegs.pc = lightrec_run_interpreter(lightrec_state,
