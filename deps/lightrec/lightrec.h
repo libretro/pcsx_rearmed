@@ -148,6 +148,9 @@ __api void lightrec_set_target_cycle_count(struct lightrec_state *state,
 					   u32 cycles);
 __api void lightrec_set_cycles_per_opcode(struct lightrec_state *state, u32 cycles);
 
+__api void lightrec_set_timer_data(struct lightrec_state *state, unsigned int timer,
+				   u32 start, u32 rate);
+
 #ifdef __cplusplus
 };
 #endif

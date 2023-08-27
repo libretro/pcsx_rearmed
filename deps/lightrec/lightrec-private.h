@@ -159,11 +159,22 @@ struct lightrec_cstate {
 	_Bool no_load_delay;
 };
 
+struct lightrec_timer_data {
+	_Alignas(16) struct {
+		u32 start;
+		u32 rate;
+		u32 m, p;
+	};
+};
+
+_Static_assert(sizeof(struct lightrec_timer_data) == 16);
+
 struct lightrec_state {
 	struct lightrec_registers regs;
 	u32 temp_reg;
 	u32 curr_pc;
 	u32 next_pc;
+	struct lightrec_timer_data timer_data[3];
 	uintptr_t wrapper_regs[NUM_TEMPS];
 	u8 in_delay_slot_n;
 	u32 current_cycle;
@@ -372,6 +383,29 @@ get_delay_slot(const struct opcode *list, u16 i)
 static inline _Bool lightrec_store_next_pc(void)
 {
 	return NUM_REGS + NUM_TEMPS <= 4;
+}
+
+static inline _Bool lightrec_load_from_timer(union code c, u32 addr)
+{
+	if (OPT_FAST_TIMER) {
+		switch(c.i.op) {
+		case OP_LW:
+		case OP_LHU:
+			switch (addr & 0x1fffffff) {
+			case 0x1f801100:
+			case 0x1f801110:
+			case 0x1f801120:
+				return 1;
+			default:
+				break;
+			}
+			break;
+		default:
+			break;
+		}
+	}
+
+	return 0;
 }
 
 #endif /* __LIGHTREC_PRIVATE_H__ */

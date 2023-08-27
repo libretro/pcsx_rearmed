@@ -1743,8 +1743,13 @@ static int lightrec_flag_io(struct lightrec_state *state, struct block *block)
 					list->flags |= LIGHTREC_NO_INVALIDATE;
 					break;
 				case PSX_MAP_HW_REGISTERS:
-					if (state->ops.hw_direct &&
-					    state->ops.hw_direct(kunseg_val,
+					if (lightrec_load_from_timer(list->c, kunseg_val)) {
+						pr_debug("Flagging opcode %u as hardware timer\n",
+							 i);
+
+						list->flags |= LIGHTREC_IO_MODE(LIGHTREC_IO_TIMER);
+					} else if (state->ops.hw_direct &&
+						   state->ops.hw_direct(kunseg_val,
 								 opcode_is_store(list->c),
 								 opcode_get_io_size(list->c))) {
 						pr_debug("Flagging opcode %u as direct I/O access\n",

@@ -1674,6 +1674,82 @@ static void rec_SWR(struct lightrec_cstate *state,
 	rec_io(state, block, offset, true, false);
 }
 
+static void rec_load_timer(struct lightrec_cstate *cstate,
+			   const struct block *block, u16 offset)
+{
+	struct regcache *reg_cache = cstate->reg_cache;
+	jit_state_t *_jit = block->_jit;
+	union code c = block->opcode_list[offset].c;
+	jit_node_t *no_div;
+	u8 rs, rt, tmp, tmp2;
+
+	/*
+	 * Compute the value of the timer from its start time, its rate,
+	 * and the current cycle count.
+	 *
+	 * The simple algorithm would be:
+	 * result = ((target - cycle - start) / rate) & 0xffff
+	 *
+	 * To avoid the division, we pre-computed m and p values in
+	 * lightrec_set_timer_data(), which should be called by the glue when
+	 * the timer settings changed.
+	 *
+	 * Using these pre-computed values, we can now compute the result
+	 * without any division:
+	 * n = target - cycle - start
+	 * q = (m * n) >> 32
+	 * t = ((n - q) >> 1) + q
+	 * result = (t >> (p - 1)) & 0xffff
+	 */
+
+	rs = lightrec_alloc_reg_in(reg_cache, _jit, c.i.rs, 0);
+	tmp2 = lightrec_alloc_reg_temp(reg_cache, _jit);
+
+	jit_andi(tmp2, rs, 0x30);
+	jit_addr(tmp2, tmp2, LIGHTREC_REG_STATE);
+
+	lightrec_free_reg(reg_cache, rs);
+
+	rt = lightrec_alloc_reg_out(reg_cache, _jit, c.i.rt,
+				    REG_EXT | REG_ZEXT);
+	tmp = lightrec_alloc_reg_temp(reg_cache, _jit);
+
+	jit_ldxi_ui(rt, LIGHTREC_REG_STATE,
+		    offsetof(struct lightrec_state, target_cycle));
+	jit_ldxi_ui(tmp, tmp2,
+		    offsetof(struct lightrec_state, timer_data[0].start));
+	jit_subr(rt, rt, LIGHTREC_REG_CYCLE);
+	jit_subr(rt, rt, tmp);
+
+	jit_ldxi_ui(tmp, tmp2,
+		    offsetof(struct lightrec_state, timer_data[0].p));
+	jit_ldxi_ui(tmp2, tmp2,
+		    offsetof(struct lightrec_state, timer_data[0].m));
+
+	no_div = jit_beqi(tmp, 0);
+
+	if (__WORDSIZE == 64) {
+		jit_mulr(tmp2, rt, tmp2);
+		jit_rshi_u(tmp2, tmp2, 32);
+	} else {
+		jit_hmulr_u(tmp2, rt, tmp2);
+	}
+
+	jit_subr(rt, rt, tmp2);
+	jit_rshi_u(rt, rt, 1);
+	jit_addr(rt, rt, tmp2);
+	jit_subi(tmp, tmp, 1);
+	jit_rshr_u(rt, rt, tmp);
+
+	jit_patch(no_div);
+
+	jit_extr_us(rt, rt);
+
+	lightrec_free_reg(reg_cache, tmp2);
+	lightrec_free_reg(reg_cache, tmp);
+	lightrec_free_reg(reg_cache, rt);
+}
+
 static void rec_load_memory(struct lightrec_cstate *cstate,
 			    const struct block *block, u16 offset,
 			    jit_code_t code, jit_code_t swap_code, bool is_unsigned,
@@ -1946,6 +2022,12 @@ static void rec_load(struct lightrec_cstate *state, const struct block *block,
 	case LIGHTREC_IO_DIRECT:
 		rec_load_direct(state, block, offset, code, swap_code, is_unsigned);
 		break;
+	case LIGHTREC_IO_TIMER:
+		if (OPT_FAST_TIMER) {
+			rec_load_timer(state, block, offset);
+			break;
+		}
+		fallthrough;
 	default:
 		rec_io(state, block, offset, false, true);
 		return;

@@ -280,8 +280,12 @@ u32 lightrec_rw(struct lightrec_state *state, union code op, u32 base,
 		   LIGHTREC_FLAGS_GET_IO_MODE(*flags) == LIGHTREC_IO_DIRECT_HW) {
 		ops = &lightrec_default_ops;
 	} else {
-		if (flags && !LIGHTREC_FLAGS_GET_IO_MODE(*flags))
-			*flags |= LIGHTREC_IO_MODE(LIGHTREC_IO_HW);
+		if (!was_tagged) {
+			if (lightrec_load_from_timer(op, addr))
+				*flags |= LIGHTREC_IO_MODE(LIGHTREC_IO_TIMER);
+			else
+				*flags |= LIGHTREC_IO_MODE(LIGHTREC_IO_HW);
+		}
 
 		ops = map->ops;
 	}
@@ -2120,4 +2124,26 @@ struct lightrec_registers * lightrec_get_registers(struct lightrec_state *state)
 void lightrec_set_cycles_per_opcode(struct lightrec_state *state, u32 cycles)
 {
 	state->cycles_per_op = cycles;
+}
+
+void lightrec_set_timer_data(struct lightrec_state *state, unsigned int idx,
+			     u32 start, u32 rate)
+{
+	struct lightrec_timer_data *timer = &state->timer_data[idx];
+
+	if (idx >= 3)
+		return;
+
+	if (timer->rate != rate) {
+		/*
+		 * Equivalent to:
+		 * timer->p = (u32) ceilf(log2((float) rate));
+		 * timer->m = (u32) ceilf(powf(2, timer->p + 32) / (float) rate);
+		 */
+		timer->p = 31 - clz32(rate) + !!(rate & (rate - 1));
+		timer->m = ((0x100000000ull << timer->p) + rate - 1) / (u64)rate;
+		timer->rate = rate;
+	}
+
+	timer->start = start;
 }
