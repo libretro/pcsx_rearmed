@@ -98,6 +98,10 @@ cycle_multiplier_overrides[] =
 	{ "SLES02914", 153 },
 	/* Syphon Filter - reportedly hangs under unknown conditions */
 	{ "SCUS94240", 169 },
+	/* Metal Gear Solid - stutters during cutscenes */
+	{ "SLUS00594", 117 },
+	{ "SLUS00776", 117 },
+	{ "SLUS00957", 117 },
 };
 
 static const struct
