@@ -49,7 +49,7 @@ struct recompiler {
 
 static unsigned int get_processors_count(void)
 {
-	unsigned int nb = 1;
+	int nb = 1;
 
 #if defined(PTW32_VERSION)
         nb = pthread_num_processors_np();
@@ -59,7 +59,7 @@ static unsigned int get_processors_count(void)
 
         nb = sysctlbyname("hw.ncpu", &count, &size, NULL, 0) ? 1 : count;
 #elif defined(_SC_NPROCESSORS_ONLN)
-	nb = sysconf(_SC_NPROCESSORS_ONLN);
+	nb = (int)sysconf(_SC_NPROCESSORS_ONLN);
 #endif
 
 	return nb < 1 ? 1 : nb;

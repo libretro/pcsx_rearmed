@@ -1918,11 +1918,13 @@ void lightrec_free_cstate(struct lightrec_cstate *cstate)
 }
 
 struct lightrec_state * lightrec_init(char *argv0,
-				      const struct lightrec_mem_map *map,
+				      const struct lightrec_mem_map *maps,
 				      size_t nb,
 				      const struct lightrec_ops *ops)
 {
-	const struct lightrec_mem_map *codebuf_map = &map[PSX_MAP_CODE_BUFFER];
+	const struct lightrec_mem_map *codebuf_map = &maps[PSX_MAP_CODE_BUFFER];
+	const struct lightrec_mem_map *map;
+	uintptr_t offset_ram, offset_bios, offset_scratch, offset_io;
 	struct lightrec_state *state;
 	uintptr_t addr;
 	void *tlsf = NULL;
@@ -1932,6 +1934,26 @@ struct lightrec_state * lightrec_init(char *argv0,
 	/* Sanity-check ops */
 	if (!ops || !ops->cop2_op || !ops->enable_ram) {
 		pr_err("Missing callbacks in lightrec_ops structure\n");
+		return NULL;
+	}
+
+	/* Sanity-check memory map */
+	map = &maps[PSX_MAP_BIOS];
+	offset_bios = (uintptr_t)map->address - map->pc;
+
+	map = &maps[PSX_MAP_SCRATCH_PAD];
+	offset_scratch = (uintptr_t)map->address - map->pc;
+
+	map = &maps[PSX_MAP_HW_REGISTERS];
+	offset_io = (uintptr_t)map->address - map->pc;
+
+	map = &maps[PSX_MAP_KERNEL_USER_RAM];
+	offset_ram = (uintptr_t)map->address - map->pc;
+
+	if (offset_bios != offset_scratch
+	    || offset_bios != offset_io
+	    || offset_bios != offset_ram) {
+		pr_err("Invalid memory map.\n");
 		return NULL;
 	}
 
@@ -1992,7 +2014,7 @@ struct lightrec_state * lightrec_init(char *argv0,
 	}
 
 	state->nb_maps = nb;
-	state->maps = map;
+	state->maps = maps;
 
 	memcpy(&state->ops, ops, sizeof(*ops));
 
@@ -2010,28 +2032,14 @@ struct lightrec_state * lightrec_init(char *argv0,
 	state->c_wrappers[C_WRAPPER_MTC] = lightrec_mtc_cb;
 	state->c_wrappers[C_WRAPPER_CP] = lightrec_cp_cb;
 
-	map = &state->maps[PSX_MAP_BIOS];
-	state->offset_bios = (uintptr_t)map->address - map->pc;
-
-	map = &state->maps[PSX_MAP_SCRATCH_PAD];
-	state->offset_scratch = (uintptr_t)map->address - map->pc;
-
-	map = &state->maps[PSX_MAP_HW_REGISTERS];
-	state->offset_io = (uintptr_t)map->address - map->pc;
-
-	map = &state->maps[PSX_MAP_KERNEL_USER_RAM];
-	state->offset_ram = (uintptr_t)map->address - map->pc;
-
 	if (state->maps[PSX_MAP_MIRROR1].address == map->address + 0x200000 &&
 	    state->maps[PSX_MAP_MIRROR2].address == map->address + 0x400000 &&
 	    state->maps[PSX_MAP_MIRROR3].address == map->address + 0x600000)
 		state->mirrors_mapped = true;
 
-	if (state->offset_bios == 0 &&
-	    state->offset_scratch == 0 &&
-	    state->offset_ram == 0 &&
-	    state->offset_io == 0 &&
-	    state->mirrors_mapped) {
+	state->offset = offset_ram;
+
+	if (state->offset == 0 && state->mirrors_mapped) {
 		pr_info("Memory map is perfect. Emitted code will be best.\n");
 	} else {
 		pr_info("Memory map is sub-par. Emitted code will be slow.\n");

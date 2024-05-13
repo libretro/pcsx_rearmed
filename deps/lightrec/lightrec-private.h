@@ -194,7 +194,7 @@ struct lightrec_state {
 	unsigned int nb_compile;
 	unsigned int nb_maps;
 	const struct lightrec_mem_map *maps;
-	uintptr_t offset_ram, offset_bios, offset_scratch, offset_io;
+	uintptr_t offset;
 	u32 opt_flags;
 	_Bool with_32bit_lut;
 	_Bool mirrors_mapped;
