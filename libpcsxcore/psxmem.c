@@ -155,7 +155,7 @@ u8 **psxMemRLUT = NULL;
 
 static int psxMemInitMap(void)
 {
-	psxM = psxMap(0x80000000, 0x00210000, 1, MAP_TAG_RAM);
+	psxM = psxMap(0x10000000, 0x00210000, 1, MAP_TAG_RAM);
 	if (psxM == MAP_FAILED)
 		psxM = psxMap(0x77000000, 0x00210000, 0, MAP_TAG_RAM);
 	if (psxM == MAP_FAILED) {
@@ -165,14 +165,14 @@ static int psxMemInitMap(void)
 	}
 	psxP = &psxM[0x200000];
 
-	psxH = psxMap(0x1f800000, 0x10000, 0, MAP_TAG_OTHER);
+	psxH = psxMap(0x2f800000, 0x10000, 0, MAP_TAG_OTHER);
 	if (psxH == MAP_FAILED) {
 		SysMessage(_("Error allocating memory!"));
 		psxMemShutdown();
 		return -1;
 	}
 
-	psxR = psxMap(0x1fc00000, 0x80000, 0, MAP_TAG_OTHER);
+	psxR = psxMap(0x2fc00000, 0x80000, 0, MAP_TAG_OTHER);
 	if (psxR == MAP_FAILED) {
 		SysMessage(_("Error allocating memory!"));
 		psxMemShutdown();
