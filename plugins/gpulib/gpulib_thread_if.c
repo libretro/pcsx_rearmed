@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 #include <pthread.h>
 #include "../gpulib/gpu.h"
 #include "../../frontend/plugin_lib.h"
@@ -78,6 +79,7 @@ static void *video_thread_main(void *arg) {
 
 #if defined(__arm__) && defined(__ARM_FP)
 	// RunFast mode
+	typedef uint32_t u32;
 	u32 fpscr = ~0;
 	__asm__ volatile("vmrs %0, fpscr" : "=r"(fpscr));
 	fpscr &= ~0x00009f9f;
