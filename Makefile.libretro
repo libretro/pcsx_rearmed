@@ -620,10 +620,25 @@ else ifeq ($(platform), emscripten)
    TARGET  := $(TARGET_NAME)_libretro_$(platform).bc
    fpic    := -fPIC
    NO_MMAP = 1
+   # we can use -lz for emscripten's built-in zlib port
+   WANT_ZLIB=0
    CFLAGS += -DNO_DYLIB -DNO_SOCKET
    CFLAGS += -msimd128 -ftree-vectorize
-   LIBPTHREAD :=
-   NO_PTHREAD=1
+   # when compiling with pthreads...
+   ifneq ($(pthread), 0)
+      # use -lpthread
+      LIBPTHREAD := -lpthread
+      NO_PTHREAD=0
+      # but we don't want to include libretro-common's rthread object files here
+      USE_RTHREADS=0
+      USE_ASYNC_CDROM=0
+      # so we disable some uses of threads within pcsx_rearmed.
+      # is this a good solution? I don't know!
+      NDRC_THREAD=0
+   else
+      LIBPTHREAD :=
+      NO_PTHREAD=1
+   endif
    DYNAREC =
    STATIC_LINKING = 1
    HAVE_PHYSICAL_CDROM = 0
