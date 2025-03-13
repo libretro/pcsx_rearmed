@@ -618,6 +618,7 @@ else ifeq ($(platform), miyoo)
 # Emscripten
 else ifeq ($(platform), emscripten)
    TARGET  := $(TARGET_NAME)_libretro_$(platform).bc
+   pthread ?= 0
    fpic    := -fPIC
    NO_MMAP = 1
    # we can use -lz for emscripten's built-in zlib port
