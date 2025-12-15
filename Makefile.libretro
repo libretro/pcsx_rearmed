@@ -663,6 +663,13 @@ endif
 	USE_LIBRETRO_VFS = 1
 endif
 
+# webOS
+ifneq (,$(findstring webos,$(CROSS_COMPILE)$(findstring starfish,$(CROSS_COMPILE))))
+	HAVE_NEON = 1
+	HAVE_NEON_ASM = 1
+	BUILTIN_GPU = neon
+endif
+
 CFLAGS += $(fpic)
 MAIN_LDFLAGS += -shared
 MAIN_LDLIBS += $(LIBPTHREAD) $(LIBM) $(LIBDL) $(LIBZ)
