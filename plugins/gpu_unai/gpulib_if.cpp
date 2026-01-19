@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "arm_features.h"
 #include "../gpulib/gpu.h"
 #include "old/if.h"
 
@@ -73,9 +74,8 @@ int renderer_init(void)
   gpu_unai.TextureWindow[3] = 255;
   //senquack - new vars must be updated whenever texture window is changed:
   //           (used for polygon-drawing in gpu_inner.h, gpu_raster_polygon.h)
-  const u32 fb = FIXED_BITS;  // # of fractional fixed-pt bits of u4/v4
-  gpu_unai.inn.u_msk = (((u32)gpu_unai.TextureWindow[2]) << fb) | ((1 << fb) - 1);
-  gpu_unai.inn.v_msk = (((u32)gpu_unai.TextureWindow[3]) << fb) | ((1 << fb) - 1);
+  gpu_unai.inn.mask_v00u =
+    ((u32)gpu_unai.TextureWindow[3] << 24) | gpu_unai.TextureWindow[2];
 
   // Configuration options
   gpu_unai.config = gpu_unai_config_ext;
@@ -158,9 +158,8 @@ static void gpuGP0Cmd_0xEx(gpu_unai_t &gpu_unai, u32 cmd_word)
         gpu_unai.TextureWindow[1] &= ~gpu_unai.TextureWindow[3];
 
         // Inner loop vars must be updated whenever texture window is changed:
-        const u32 fb = FIXED_BITS;  // # of fractional fixed-pt bits of u4/v4
-        gpu_unai.inn.u_msk = (((u32)gpu_unai.TextureWindow[2]) << fb) | ((1 << fb) - 1);
-        gpu_unai.inn.v_msk = (((u32)gpu_unai.TextureWindow[3]) << fb) | ((1 << fb) - 1);
+        gpu_unai.inn.mask_v00u =
+          ((u32)gpu_unai.TextureWindow[3] << 24) | gpu_unai.TextureWindow[2];
 
         gpuSetTexture(gpu_unai.GPU_GP1);
       }
@@ -273,7 +272,6 @@ int renderer_do_cmd_list(u32 *list_, int list_len, uint32_t *ex_regs,
       case 0x22:
       case 0x23: {          // Monochrome 3-pt poly
         PP driver = gpuPolySpanDrivers[
-          //(gpu_unai.blit_mask?1024:0) |
           Blending_Mode |
           gpu_unai.Masking | Blending | gpu_unai.PixelMSB
         ];
@@ -289,7 +287,6 @@ int renderer_do_cmd_list(u32 *list_, int list_len, uint32_t *ex_regs,
         gpuSetTexture(le32_to_u32(gpu_unai.PacketBuffer.U4[4]) >> 16);
 
         u32 driver_idx =
-          //(gpu_unai.blit_mask?1024:0) |
           Dithering |
           Blending_Mode | gpu_unai.TEXT_MODE |
           gpu_unai.Masking | Blending | gpu_unai.PixelMSB;
@@ -311,7 +308,6 @@ int renderer_do_cmd_list(u32 *list_, int list_len, uint32_t *ex_regs,
       case 0x2A:
       case 0x2B: {          // Monochrome 4-pt poly
         PP driver = gpuPolySpanDrivers[
-          //(gpu_unai.blit_mask?1024:0) |
           Blending_Mode |
           gpu_unai.Masking | Blending | gpu_unai.PixelMSB
         ];
@@ -323,9 +319,11 @@ int renderer_do_cmd_list(u32 *list_, int list_len, uint32_t *ex_regs,
       case 0x2D:
       case 0x2E:
       case 0x2F: {          // Textured 4-pt poly
+        u32 dithering = Dithering;
         u32 simplified_count;
         gpuSetTexture(le32_to_u32(gpu_unai.PacketBuffer.U4[4]) >> 16);
-        if ((simplified_count = prim_try_simplify_quad_t(gpu_unai.PacketBuffer.U4,
+        if (!dithering &&
+            (simplified_count = prim_try_simplify_quad_t(gpu_unai.PacketBuffer.U4,
               gpu_unai.PacketBuffer.U4)))
         {
           for (i = 0;; ) {
@@ -339,8 +337,7 @@ int renderer_do_cmd_list(u32 *list_, int list_len, uint32_t *ex_regs,
         gpuSetCLUT(le32_to_u32(gpu_unai.PacketBuffer.U4[2]) >> 16);
 
         u32 driver_idx =
-          //(gpu_unai.blit_mask?1024:0) |
-          Dithering |
+          dithering |
           Blending_Mode | gpu_unai.TEXT_MODE |
           gpu_unai.Masking | Blending | gpu_unai.PixelMSB;
 
@@ -360,19 +357,21 @@ int renderer_do_cmd_list(u32 *list_, int list_len, uint32_t *ex_regs,
       case 0x31:
       case 0x32:
       case 0x33: {          // Gouraud-shaded 3-pt poly
+        u32 dithering = Dithering;
         //NOTE: The '129' here is CF_GOURAUD | CF_LIGHT, however
         // this is an untextured poly, so CF_LIGHT (texture blend)
         // shouldn't apply. Until the original array of template
         // instantiation ptrs is fixed, we're stuck with this. (TODO)
         u8 gouraud = 129;
-        u32 xor_ = 0, rgb0 = le32_raw(gpu_unai.PacketBuffer.U4[0]);
-        for (i = 1; i < 3; i++)
-          xor_ |= rgb0 ^ le32_raw(gpu_unai.PacketBuffer.U4[i * 2]);
-        if ((xor_ & HTOLE32(0xf8f8f8)) == 0)
-          gouraud = 0;
+        if (!dithering) {
+          u32 xor_ = 0, rgb0 = le32_raw(gpu_unai.PacketBuffer.U4[0]);
+          for (i = 1; i < 3; i++)
+            xor_ |= rgb0 ^ le32_raw(gpu_unai.PacketBuffer.U4[i * 2]);
+          if ((xor_ & HTOLE32(0xf8f8f8)) == 0)
+            gouraud = 0;
+        }
         PP driver = gpuPolySpanDrivers[
-          //(gpu_unai.blit_mask?1024:0) |
-          Dithering |
+          dithering |
           Blending_Mode |
           gpu_unai.Masking | Blending | gouraud | gpu_unai.PixelMSB
         ];
@@ -389,6 +388,7 @@ int renderer_do_cmd_list(u32 *list_, int list_len, uint32_t *ex_regs,
       case 0x37: {          // Gouraud-shaded, textured 3-pt poly
         gpuSetCLUT    (le32_to_u32(gpu_unai.PacketBuffer.U4[2]) >> 16);
         gpuSetTexture (le32_to_u32(gpu_unai.PacketBuffer.U4[5]) >> 16);
+        u32 dithering = Dithering;
         u8 lighting = Lighting;
         u8 gouraud = lighting ? (1<<7) : 0;
         if (lighting) {
@@ -397,13 +397,12 @@ int renderer_do_cmd_list(u32 *list_, int list_len, uint32_t *ex_regs,
             xor_ |= rgb0 ^ le32_raw(gpu_unai.PacketBuffer.U4[i * 3]);
           if ((xor_ & HTOLE32(0xf8f8f8)) == 0) {
             gouraud = 0;
-            if (!need_lighting(rgb0))
+            if (!dithering && !need_lighting(rgb0))
               lighting = 0;
           }
         }
         PP driver = gpuPolySpanDrivers[
-          //(gpu_unai.blit_mask?1024:0) |
-          Dithering |
+          dithering |
           Blending_Mode | gpu_unai.TEXT_MODE |
           gpu_unai.Masking | Blending | gouraud | lighting | gpu_unai.PixelMSB
         ];
@@ -418,16 +417,18 @@ int renderer_do_cmd_list(u32 *list_, int list_len, uint32_t *ex_regs,
       case 0x39:
       case 0x3A:
       case 0x3B: {          // Gouraud-shaded 4-pt poly
+        u32 dithering = Dithering;
         // See notes regarding '129' for 0x30..0x33 further above -senquack
         u8 gouraud = 129;
-        u32 xor_ = 0, rgb0 = le32_raw(gpu_unai.PacketBuffer.U4[0]);
-        for (i = 1; i < 4; i++)
-          xor_ |= rgb0 ^ le32_raw(gpu_unai.PacketBuffer.U4[i * 2]);
-        if ((xor_ & HTOLE32(0xf8f8f8)) == 0)
-          gouraud = 0;
+        if (!dithering) {
+          u32 xor_ = 0, rgb0 = le32_raw(gpu_unai.PacketBuffer.U4[0]);
+          for (i = 1; i < 4; i++)
+            xor_ |= rgb0 ^ le32_raw(gpu_unai.PacketBuffer.U4[i * 2]);
+          if ((xor_ & HTOLE32(0xf8f8f8)) == 0)
+            gouraud = 0;
+        }
         PP driver = gpuPolySpanDrivers[
-          //(gpu_unai.blit_mask?1024:0) |
-          Dithering |
+          dithering |
           Blending_Mode |
           gpu_unai.Masking | Blending | gouraud | gpu_unai.PixelMSB
         ];
@@ -442,9 +443,11 @@ int renderer_do_cmd_list(u32 *list_, int list_len, uint32_t *ex_regs,
       case 0x3D:
       case 0x3E:
       case 0x3F: {          // Gouraud-shaded, textured 4-pt poly
+        u32 dithering = Dithering;
         u32 simplified_count;
         gpuSetTexture(le32_to_u32(gpu_unai.PacketBuffer.U4[5]) >> 16);
-        if ((simplified_count = prim_try_simplify_quad_gt(gpu_unai.PacketBuffer.U4,
+        if (!dithering &&
+             (simplified_count = prim_try_simplify_quad_gt(gpu_unai.PacketBuffer.U4,
               gpu_unai.PacketBuffer.U4)))
         {
           for (i = 0;; ) {
@@ -464,13 +467,12 @@ int renderer_do_cmd_list(u32 *list_, int list_len, uint32_t *ex_regs,
             xor_ |= rgb0 ^ le32_raw(gpu_unai.PacketBuffer.U4[i * 3]);
           if ((xor_ & HTOLE32(0xf8f8f8)) == 0) {
             gouraud = 0;
-            if (!need_lighting(rgb0))
+            if (!dithering && !need_lighting(rgb0))
               lighting = 0;
           }
         }
         PP driver = gpuPolySpanDrivers[
-          //(gpu_unai.blit_mask?1024:0) |
-          Dithering |
+          dithering |
           Blending_Mode | gpu_unai.TEXT_MODE |
           gpu_unai.Masking | Blending | gouraud | lighting | gpu_unai.PixelMSB
         ];

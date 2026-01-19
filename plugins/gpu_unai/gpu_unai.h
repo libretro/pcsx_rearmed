@@ -56,12 +56,51 @@
 #define s64 int64_t
 #define u64 uint64_t
 
-typedef union {
+union gcol_t {
 	struct {
 		u16 r, g, b;
+#ifdef HAVE_ARMV6
+		u16 counter;
+#else
+		u16 unused;
+#endif
 	} c;
+#if defined(HAVE_ARMV6) || (defined(__SIZEOF_SIZE_T__) && __SIZEOF_SIZE_T__ == 4)
+	u32 raw32[2];
+#else
 	u64 raw;
-} gcol_t;
+#endif
+
+	inline gcol_t & operator+=(const gcol_t &rhs)
+	{
+#ifdef HAVE_ARMV6
+		// prevent bit spills the other versions have,
+		// allowing to use the unused part as a counter
+		asm("uadd16 %[d], %[d], %[s]" : [d]"+r"(raw32[0]) : [s]"r"(rhs.raw32[0]));
+		asm("uadd16 %[d], %[d], %[s]" : [d]"+r"(raw32[1]) : [s]"r"(rhs.raw32[1]));
+#elif defined(__SIZEOF_SIZE_T__) && __SIZEOF_SIZE_T__ == 4
+		// avoid having to do carry that's not needed here
+		raw32[0] += rhs.raw32[0];
+		raw32[1] += rhs.raw32[1];
+#else
+		raw += rhs.raw;
+#endif
+		return *this;
+	}
+
+	inline void set_counter(int counter)
+	{
+#ifdef HAVE_ARMV6
+		c.counter = counter;
+#endif
+	}
+	inline void get_counter(int &counter)
+	{
+#ifdef HAVE_ARMV6
+		counter = raw32[1];
+#endif
+	}
+};
 
 #ifndef NDEBUG
 
@@ -205,7 +244,8 @@ struct gpu_unai_inner_t {
 	// NOTE: U,V are no longer packed together into one u32, this proved to be
 	//  too imprecise, leading to pixel dropouts.  Example: NFS3's skybox.
 	u32 u, v;                 // 08 not fractional for sprites
-	u32 u_msk, v_msk;         // 10 always 22.10
+	u32 mask_v00u;            // 10 (v_mask << 24) | (u_mask & 0xff)
+	u32 unused;
 	union {
 	  struct {
 	    s32 u_inc, v_inc;     // 18 poly uv increment, 22.10
@@ -216,12 +256,20 @@ struct gpu_unai_inner_t {
 	};
 
 	// Color for flat-shaded, texture-blended prims
-	u8  r5, g5, b5, pad5;     // 20 5-bit light for undithered prims
-	u8  r8, g8, b8, pad8;     // 24 8-bit light for dithered prims
+	u8  r5, g5, b5, pad5;     // 20 5-bit light for sprite asm
+	union {
+	  u32 bgr0888;            // 24 8-bit light for dithered prims
+	  struct {
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	    u8 pad8, b8, g8, r8;
+#else
+	    u8 r8, g8, b8, pad8;
+#endif
+	  };
+	};
 
 	// Color for Gouraud-shaded prims
 	// Fixed-pt 8.8 rgb triplet
-	// Packed fixed-pt 8.3:8.3:8.2 rgb triplet
 	//  layout:  ccccccccXXXXXXXX for c in [r, g, b]
 	//           ^ bit 16
 	gcol_t gCol;       // 28
@@ -230,10 +278,7 @@ struct gpu_unai_inner_t {
 	// Color for flat-shaded, untextured prims
 	u16 PixelData;     // 38 bgr555 color for untextured flat-shaded polys
 
-	u8 blit_mask;           // Determines what pixels to skip when rendering.
-	                        //  Only useful on low-resolution devices using
-	                        //  a simple pixel-dropping downscaler for PS1
-	                        //  high-res modes. See 'pixel_skip' option.
+	u8 unused2;
 
 	u8 ilace_mask;          // Determines what lines to skip when rendering.
 	                        //  Normally 0 when PS1 240 vertical res is in
@@ -317,6 +362,9 @@ struct gpu_unai_t {
 	// End of inner Loop parameters
 	////////////////////////////////////////////////////////////////////////////
 
+	u32 DitherLut32[4];     // shifted up by 4, packed into u32 as 4 values
+	s16 DitherLut16[4][4];  // shifted up by 4 and s16 to simplify lookup asm
+
 	bool prog_ilace_flag;   // Tracks successive frames for 'prog_ilace' option
 
 	u8 BLEND_MODE;
@@ -328,7 +376,6 @@ struct gpu_unai_t {
 	gpu_unai_config_t config;
 
 	u8  LightLUT[32*32];    // 5-bit lighting LUT (gpu_inner_light.h)
-	u32 DitherMatrix[64];   // Matrix of dither coefficients
 };
 
 static __attribute__((aligned(32))) gpu_unai_t gpu_unai;

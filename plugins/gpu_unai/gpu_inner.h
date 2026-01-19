@@ -26,7 +26,7 @@
 // Inner loop driver instantiation file
 
 ///////////////////////////////////////////////////////////////////////////////
-//  Option Masks (CF template paramter)
+//  Option Masks (CF template paramter): ds gttm mcbl
 #define  CF_LIGHT     ((CF>> 0)&1) // Lighting
 #define  CF_BLEND     ((CF>> 1)&1) // Blending
 #define  CF_MASKCHECK ((CF>> 2)&1) // Mask bit check
@@ -35,21 +35,6 @@
 #define  CF_GOURAUD   ((CF>> 7)&1) // Gouraud shading
 #define  CF_MASKSET   ((CF>> 8)&1) // Mask bit set
 #define  CF_DITHER    ((CF>> 9)&1) // Dithering
-#define  CF_BLITMASK  ((CF>>10)&1) // blit_mask check (skip rendering pixels
-                                   //  that wouldn't end up displayed on
-                                   //  low-res screen using simple downscaler)
-
-//#ifdef __arm__
-//#ifndef ENABLE_GPU_ARMV7
-/* ARMv5 */
-//#include "gpu_inner_blend_arm5.h"
-//#else
-/* ARMv7 optimized */
-//#include "gpu_inner_blend_arm7.h"
-//#endif
-//#else
-//#include "gpu_inner_blend.h"
-//#endif
 
 #include "gpu_inner_blend.h"
 #include "gpu_inner_quantization.h"
@@ -61,16 +46,16 @@
 #include "gpu_arm.h"
 #include "gpu_inner_blend_arm.h"
 #include "gpu_inner_light_arm.h"
-#define gpuBlending gpuBlendingARM
-#define gpuLightingTXT gpuLightingTXTARM
-#else
+#endif
+#ifndef gpuBlending // gpuBlendingARM
 #define gpuBlending gpuBlendingGeneric
+#endif
+#ifndef gpuLightingTXT // gpuLightingTXTARM
 #define gpuLightingTXT gpuLightingTXTGeneric
 #endif
-
-// Non-dithering lighting and blending functions preserve uSrc
-// MSB. This saves a few operations and useless load/stores.
-#define MSB_PRESERVED (!CF_DITHER)
+#ifndef gpuLightingTXTGouraud // gpuLightingTXTGouraudARM
+#define gpuLightingTXTGouraud gpuLightingTXTGouraudGeneric
+#endif
 
 // If defined, Gouraud colors are fixed-point 5.11, otherwise they are 8.16
 // This is only for debugging/verification of low-precision colors in C.
@@ -124,10 +109,6 @@ static inline u16 gpuGouraudColor15bpp(u32 r, u32 g, u32 b)
 template<int CF>
 static le16_t* gpuPixelSpanFn(le16_t* pDst, uintptr_t data, ptrdiff_t incr, size_t len)
 {
-	// Blend func can save an operation if it knows uSrc MSB is
-	//  unset. For untextured prims, this is always true.
-	const bool skip_uSrc_mask = true;
-
 	u16 col;
 	struct GouraudColor * gcPtr;
 	u32 r, g, b;
@@ -163,7 +144,7 @@ static le16_t* gpuPixelSpanFn(le16_t* pDst, uintptr_t data, ptrdiff_t incr, size
 				uint_fast16_t uSrc = col;
 
 				if (CF_BLEND)
-					uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
+					uSrc = gpuBlending<CF_BLENDMODE, true>(uSrc, uDst);
 
 				if (CF_MASKSET) { *pDst = u16_to_le16(uSrc | 0x8000); }
 				else            { *pDst = u16_to_le16(uSrc);          }
@@ -189,12 +170,8 @@ static le16_t* gpuPixelSpanFn(le16_t* pDst, uintptr_t data, ptrdiff_t incr, size
 
 				uint_fast16_t uSrc = col;
 
-				// Blend func can save an operation if it knows uSrc MSB is
-				//  unset. For untextured prims, this is always true.
-				const bool skip_uSrc_mask = true;
-
 				if (CF_BLEND)
-					uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
+					uSrc = gpuBlending<CF_BLENDMODE, true>(uSrc, uDst);
 
 				if (CF_MASKSET) { *pDst = u16_to_le16(uSrc | 0x8000); }
 				else            { *pDst = u16_to_le16(uSrc);          }
@@ -301,10 +278,6 @@ static inline void gpuTileSpanFn(le16_t *pDst, u16 data, u32 count)
 		} while (--count);
 	} else
 	{
-		// Blend func can save an operation if it knows uSrc MSB is
-		//  unset. For untextured prims, this is always true.
-		const bool skip_uSrc_mask = true;
-
 		uint_fast16_t uSrc, uDst;
 		do
 		{
@@ -314,16 +287,10 @@ static inline void gpuTileSpanFn(le16_t *pDst, u16 data, u32 count)
 			uSrc = data;
 
 			if (CF_BLEND)
-				uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
+				uSrc = gpuBlending<CF_BLENDMODE, true>(uSrc, uDst);
 
 			if (CF_MASKSET) { *pDst = u16_to_le16(uSrc | 0x8000); }
 			else            { *pDst = u16_to_le16(uSrc);          }
-
-			//senquack - Did not apply "Silent Hill" mask-bit fix to here.
-			// It is hard to tell from scarce documentation available and
-			//  lack of comments in code, but I believe the tile-span
-			//  functions here should not bother to preserve any source MSB,
-			//  as they are not drawing from a texture.
 endtile:
 			pDst++;
 		}
@@ -417,24 +384,16 @@ template<int CF>
 static noinline void gpuSpriteDriverFn(le16_t *pPixel, u32 count, const u8 *pTxt_base,
 	const gpu_unai_inner_t &inn)
 {
-	// Blend func can save an operation if it knows uSrc MSB is unset.
-	//  Untextured prims can always skip (source color always comes with MSB=0).
-	//  For textured prims, the generic lighting funcs always return it unset. (bonus!)
-	const bool skip_uSrc_mask = MSB_PRESERVED ? (!CF_TEXTMODE) : (!CF_TEXTMODE) || CF_LIGHT;
-
-	uint_fast16_t uSrc, uDst, srcMSB;
+	uint_fast16_t uSrc, uDst;
 	bool should_blend;
-	u32 u0_mask = inn.u_msk >> 10;
+	u32 u0_mask = inn.mask_v00u & 0xff;
+	u32 bgr0888;
 
-	u8 r5, g5, b5;
-	if (CF_LIGHT) {
-		r5 = inn.r5;
-		g5 = inn.g5;
-		b5 = inn.b5;
-	}
+	if (CF_LIGHT)
+		bgr0888 = gpu_unai.inn.bgr0888;
 
 	const le16_t *CBA_; if (CF_TEXTMODE!=3) CBA_ = inn.CBA;
-	const u32 v0_mask = inn.v_msk >> 10;
+	const u32 v0_mask = inn.mask_v00u >> 24;
 	s32 y0 = inn.y0, y1 = inn.y1, li = inn.ilace_mask;
 	u32 u0_ = inn.u, v0 = inn.v;
 
@@ -469,21 +428,15 @@ static noinline void gpuSpriteDriverFn(le16_t *pPixel, u32 count, const u8 *pTxt
 
 		if (!uSrc) goto endsprite;
 
-		//senquack - save source MSB, as blending or lighting macros will not
-		//           (Silent Hill gray rectangles mask bit bug)
-		if (CF_BLEND || CF_LIGHT) srcMSB = uSrc & 0x8000;
-		
 		if (CF_LIGHT)
-			uSrc = gpuLightingTXT(uSrc, r5, g5, b5);
+			uSrc = gpuLightingTXT(uSrc, bgr0888);
 
-		should_blend = MSB_PRESERVED ? uSrc & 0x8000 : srcMSB;
-
+		should_blend = uSrc & 0x8000;
 		if (CF_BLEND && should_blend)
-			uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
+			uSrc = gpuBlending<CF_BLENDMODE, false>(uSrc, uDst) | 0x8000;
 
-		if (CF_MASKSET)                                    { *pDst = u16_to_le16(uSrc | 0x8000); }
-		else if (!MSB_PRESERVED && (CF_BLEND || CF_LIGHT)) { *pDst = u16_to_le16(uSrc | srcMSB); }
-		else                                               { *pDst = u16_to_le16(uSrc);          }
+		if (CF_MASKSET) { *pDst = u16_to_le16(uSrc | 0x8000); }
+		else            { *pDst = u16_to_le16(uSrc);          }
 
 endsprite:
 		u0 += (CF_TEXTMODE==3) ? 2 : 1;
@@ -502,7 +455,7 @@ static void SpriteMaybeAsm(le16_t *pPixel, u32 count, const u8 *pTxt_base,
 #if 1
   s32 lines = inn.y1 - inn.y0;
   u32 u1m = inn.u + count - 1, v1m = inn.v + lines - 1;
-  if (u1m == (u1m & (inn.u_msk >> 10)) && v1m == (v1m & (inn.v_msk >> 10))) {
+  if (u1m == (u1m & (inn.mask_v00u & 0xff)) && v1m == (v1m & (inn.mask_v00u >> 24))) {
     const u8 *pTxt = pTxt_base + inn.v * 2048;
     switch (CF) {
     case 0x20: sprite_driver_4bpp_asm (pPixel, pTxt + inn.u / 2, count, &inn); return;
@@ -510,7 +463,7 @@ static void SpriteMaybeAsm(le16_t *pPixel, u32 count, const u8 *pTxt_base,
     case 0x60: sprite_driver_16bpp_asm(pPixel, pTxt + inn.u * 2, count, &inn); return;
     }
   }
-  if (v1m == (v1m & (inn.v_msk >> 10))) {
+  if (v1m == (v1m & (inn.mask_v00u >> 24))) {
     const u8 *pTxt = pTxt_base + inn.v * 2048;
     switch (CF) {
     case 0x20: sprite_driver_4bpp_l0_std_asm(pPixel, pTxt, count, &inn); return;
@@ -586,6 +539,10 @@ const PS gpuSpriteDrivers[256] = {
 #undef TA
 #undef TA6
 
+// this tries to avoid pointer shifting
+#define DITHER_LKUP(lut, dst) \
+	*(s16 *)((char *)(lut) + ((uintptr_t)(pDst) & 6))
+
 ///////////////////////////////////////////////////////////////////////////////
 //  GPU Polygon innerloops generator
 
@@ -608,15 +565,13 @@ const PS gpuSpriteDrivers[256] = {
 //             relevant blend/light headers.
 // (see README_senquack.txt)
 template<int CF>
-static noinline void gpuPolySpanFn(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count)
+static noinline void gpuPolySpanFn(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count, s32 y)
 {
-	// Blend func can save an operation if it knows uSrc MSB is unset.
-	//  Untextured prims can always skip this (src color MSB is always 0).
-	//  For textured prims, the generic lighting funcs always return it unset. (bonus!)
-	const bool skip_uSrc_mask = MSB_PRESERVED ? (!CF_TEXTMODE) : (!CF_TEXTMODE) || CF_LIGHT;
 	bool should_blend;
+	s16 DitherLut16[4];
 
-	u32 bMsk; if (CF_BLITMASK) bMsk = gpu_unai.inn.blit_mask;
+	if (CF_DITHER && CF_TEXTMODE)
+		memcpy(DitherLut16, &gpu_unai.DitherLut16[y & 3][0], sizeof(DitherLut16));
 
 	if (!CF_TEXTMODE)
 	{
@@ -627,18 +582,13 @@ static noinline void gpuPolySpanFn(const gpu_unai_t &gpu_unai, le16_t *pDst, u32
 			do {
 				uint_fast16_t uSrc, uDst;
 
-				// NOTE: Don't enable CF_BLITMASK  pixel skipping (speed hack)
-				//  on untextured polys. It seems to do more harm than good: see
-				//  gravestone text at end of Medieval intro sequence. -senquack
-				//if (CF_BLITMASK) { if ((bMsk>>((((uintptr_t)pDst)>>1)&7))&1) { goto endpolynotextnogou; } }
-
 				if (CF_BLEND || CF_MASKCHECK) uDst = le16_to_u16(*pDst);
 				if (CF_MASKCHECK) { if (uDst&0x8000) { goto endpolynotextnogou; } }
 
 				uSrc = pix15;
 
 				if (CF_BLEND)
-					uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
+					uSrc = gpuBlending<CF_BLENDMODE, true>(uSrc, uDst);
 
 				if (CF_MASKSET) { *pDst = u16_to_le16(uSrc | 0x8000); }
 				else            { *pDst = u16_to_le16(uSrc);          }
@@ -652,38 +602,36 @@ endpolynotextnogou:
 			// UNTEXTURED, GOURAUD
 			gcol_t l_gCol = gpu_unai.inn.gCol;
 			gcol_t l_gInc = gpu_unai.inn.gInc;
+			u32 dv;
+			if (CF_DITHER) {
+				uintptr_t rot = ((uintptr_t)pDst & 0x06) << 2;
+				dv = gpu_unai.DitherLut32[y & 3];
+				dv = (dv >> rot) | (dv << ((32 - rot) & 31));
+			}
 
 			do {
 				uint_fast16_t uDst, uSrc;
-
-				// See note in above loop regarding CF_BLITMASK
-				//if (CF_BLITMASK) { if ((bMsk>>((((uintptr_t)pDst)>>1)&7))&1) goto endpolynotextgou; }
 
 				if (CF_BLEND || CF_MASKCHECK) uDst = le16_to_u16(*pDst);
 				if (CF_MASKCHECK) { if (uDst&0x8000) goto endpolynotextgou; }
 
 				if (CF_DITHER) {
 					// GOURAUD, DITHER
-
-					u32 uSrc24 = gpuLightingRGB24(l_gCol);
-					if (CF_BLEND)
-						uSrc24 = gpuBlending24<CF_BLENDMODE>(uSrc24, uDst);
-					uSrc = gpuColorQuantization24<CF_DITHER>(uSrc24, pDst);
+					uSrc = gpuLightingRGBDither(l_gCol, (s8)dv);
+					dv = (dv >> 8) | (dv << 24);
 				} else {
 					// GOURAUD, NO DITHER
-
 					uSrc = gpuLightingRGB(l_gCol);
-
-					if (CF_BLEND)
-						uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
 				}
+				if (CF_BLEND)
+					uSrc = gpuBlending<CF_BLENDMODE, true>(uSrc, uDst);
 
 				if (CF_MASKSET) { *pDst = u16_to_le16(uSrc | 0x8000); }
 				else            { *pDst = u16_to_le16(uSrc);          }
 
 endpolynotextgou:
 				pDst++;
-				l_gCol.raw += l_gInc.raw;
+				l_gCol += l_gInc;
 			}
 			while (--count);
 		}
@@ -692,71 +640,64 @@ endpolynotextgou:
 	{
 		// TEXTURED
 
-		uint_fast16_t uDst, uSrc, srcMSB;
+		uint_fast16_t uDst, uSrc;
 
 		//senquack - note: original UNAI code had gpu_unai.{u4/v4} packed into
 		// one 32-bit unsigned int, but this proved to lose too much accuracy
 		// (pixel drouputs noticeable in NFS3 sky), so now are separate vars.
-		u32 l_u_msk = gpu_unai.inn.u_msk;     u32 l_v_msk = gpu_unai.inn.v_msk;
-		u32 l_u = gpu_unai.inn.u & l_u_msk;   u32 l_v = gpu_unai.inn.v & l_v_msk;
-		s32 l_u_inc = gpu_unai.inn.u_inc;     s32 l_v_inc = gpu_unai.inn.v_inc;
+		u32 l_u = gpu_unai.inn.u;         u32 l_v = gpu_unai.inn.v;
+		s32 l_u_inc = gpu_unai.inn.u_inc; s32 l_v_inc = gpu_unai.inn.v_inc;
+		u32 mask_v00u = gpu_unai.inn.mask_v00u;
 		l_v <<= 1;
 		l_v_inc <<= 1;
-		l_v_msk = (l_v_msk & (0xff<<10)) << 1;
 
 		const le16_t* TBA_ = gpu_unai.inn.TBA;
 		const le16_t* CBA_; if (CF_TEXTMODE!=3) CBA_ = gpu_unai.inn.CBA;
 
-		u8 r5, g5, b5;
-		u8 r8, g8, b8;
+		u32 bgr0888;
 
 		gcol_t l_gInc, l_gCol;
+		int pcounter = count - 1; // "repeat while positive" counter
 
 		if (CF_LIGHT) {
 			if (CF_GOURAUD) {
 				l_gInc = gpu_unai.inn.gInc;
 				l_gCol = gpu_unai.inn.gCol;
+
+				l_gInc.set_counter(-1);
+				l_gCol.set_counter(pcounter);
 			} else {
-				if (CF_DITHER) {
-					r8 = gpu_unai.inn.r8;
-					g8 = gpu_unai.inn.g8;
-					b8 = gpu_unai.inn.b8;
-				} else {
-					r5 = gpu_unai.inn.r5;
-					g5 = gpu_unai.inn.g5;
-					b5 = gpu_unai.inn.b5;
-				}
+				// keep this packed, otherwise gcc spills too much
+				bgr0888 = gpu_unai.inn.bgr0888;
 			}
 		}
 
 		do
 		{
-			if (CF_BLITMASK) { if ((bMsk>>((((uintptr_t)pDst)>>1)&7))&1) goto endpolytext; }
 			if (CF_MASKCHECK || CF_BLEND) { uDst = le16_to_u16(*pDst); }
 			if (CF_MASKCHECK) if (uDst&0x8000) { goto endpolytext; }
 
 			//senquack - adapted to work with new 22.10 fixed point routines:
 			//           (UNAI originally used 16.16)
 			if (CF_TEXTMODE==1) {  //  4bpp (CLUT)
-				u32 tu=(l_u>>10);
-				u32 tv=l_v&l_v_msk;
+				u32 tu = (l_u >> 10) & mask_v00u;
+				u32 tv =  l_v & (mask_v00u >> 13);
 				u8 rgb=((u8*)TBA_)[tv+(tu>>1)];
 				uSrc=le16_to_u16(CBA_[(rgb>>((tu&1)<<2))&0xf]);
 				if (!uSrc) goto endpolytext;
 			}
 			if (CF_TEXTMODE==2) {  //  8bpp (CLUT)
-				u32 tv=l_v&l_v_msk;
-				uSrc = le16_to_u16(CBA_[((u8*)TBA_)[tv+(l_u>>10)]]);
+				u32 tu = (l_u >> 10) & mask_v00u;
+				u32 tv =  l_v & (mask_v00u >> 13);
+				uSrc = le16_to_u16(CBA_[((u8*)TBA_)[tv+tu]]);
 				if (!uSrc) goto endpolytext;
 			}
 			if (CF_TEXTMODE==3) {  // 16bpp
-				u32 tv=(l_v&l_v_msk)>>1;
-				uSrc = le16_to_u16(TBA_[tv+(l_u>>10)]);
+				u32 tu = (l_u >> 10) & mask_v00u;
+				u32 tv = (l_v >> 1) & (mask_v00u >> 14);
+				uSrc = le16_to_u16(TBA_[tv+tu]);
 				if (!uSrc) goto endpolytext;
 			}
-
-			// Save source MSB, as blending or lighting will not (Silent Hill)
-			if (CF_BLEND || CF_LIGHT) srcMSB = uSrc & 0x8000;
 
 			// When textured, only dither when LIGHT (texture blend) is enabled
 			// LIGHT &&  BLEND => dither
@@ -765,69 +706,84 @@ endpolynotextgou:
 			//!LIGHT && !BLEND => no dither
 
 			if (CF_DITHER && CF_LIGHT) {
-				u32 uSrc24;
-				if ( CF_GOURAUD)
-					uSrc24 = gpuLightingTXT24Gouraud(uSrc, l_gCol);
-				if (!CF_GOURAUD)
-					uSrc24 = gpuLightingTXT24(uSrc, r8, g8, b8);
-
-				if (CF_BLEND && srcMSB)
-					uSrc24 = gpuBlending24<CF_BLENDMODE>(uSrc24, uDst);
-
-				uSrc = gpuColorQuantization24<CF_DITHER>(uSrc24, pDst);
-			} else
+				int_fast16_t dv = DITHER_LKUP(DitherLut16, pDst);
+				if (CF_GOURAUD)
+					uSrc = gpuLightingTXTGouraudDither(uSrc, l_gCol, dv);
+				else
+					uSrc = gpuLightingTXTDither(uSrc, bgr0888, dv);
+			}
+			else
 			{
 				if (CF_LIGHT) {
-					if ( CF_GOURAUD)
+					if (CF_GOURAUD)
 						uSrc = gpuLightingTXTGouraud(uSrc, l_gCol);
-					if (!CF_GOURAUD)
-						uSrc = gpuLightingTXT(uSrc, r5, g5, b5);
+					else
+						uSrc = gpuLightingTXT(uSrc, bgr0888);
 				}
 
-				should_blend = MSB_PRESERVED ? uSrc & 0x8000 : srcMSB;
-				if (CF_BLEND && should_blend)
-					uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
 			}
+			should_blend = uSrc & 0x8000;
+			if (CF_BLEND && should_blend)
+				uSrc = gpuBlending<CF_BLENDMODE, false>(uSrc, uDst) | 0x8000;
 
-			if (CF_MASKSET)                                    { *pDst = u16_to_le16(uSrc | 0x8000); }
-			else if (!MSB_PRESERVED && (CF_BLEND || CF_LIGHT)) { *pDst = u16_to_le16(uSrc | srcMSB); }
-			else                                               { *pDst = u16_to_le16(uSrc);          }
+			if (CF_MASKSET) { *pDst = u16_to_le16(uSrc | 0x8000); }
+			else            { *pDst = u16_to_le16(uSrc);          }
 endpolytext:
 			pDst++;
-			l_u = (l_u + l_u_inc) & l_u_msk;
+			l_u += l_u_inc;
 			l_v += l_v_inc;
-			if (CF_LIGHT && CF_GOURAUD)
-				l_gCol.raw += l_gInc.raw;
+			if (CF_LIGHT && CF_GOURAUD) {
+				l_gCol += l_gInc;
+				l_gCol.get_counter(pcounter);
+			}
+			pcounter--;
 		}
-		while (--count);
+		while (pcounter >= 0);
 	}
 }
 
 #ifdef __arm__
 template<int CF>
-static void PolySpanMaybeAsm(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count)
+static void PolySpanMaybeAsm(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count, s32 y)
 {
+#define DV(y) gpu_unai.DitherLut32[y & 3]
+	// [utx|Xbp]     - untextured, Xbpp
+	// l[0|1|g]      - modulation/lighting off|on|gouraud
+	// d[0|1]        - dither off/on
+	// st[d|0|1|2|3] - semitransparency mode disabled/0/1/2/3
 	switch (CF) {
-	case 0x02: poly_untex_st0_asm  (pDst, &gpu_unai.inn, count); break;
-	case 0x0a: poly_untex_st1_asm  (pDst, &gpu_unai.inn, count); break;
-	case 0x1a: poly_untex_st3_asm  (pDst, &gpu_unai.inn, count); break;
-	case 0x20: poly_4bpp_asm       (pDst, &gpu_unai.inn, count); break;
-	case 0x22: poly_4bpp_l0_st0_asm(pDst, &gpu_unai.inn, count); break;
-	case 0x40: poly_8bpp_asm       (pDst, &gpu_unai.inn, count); break;
-	case 0x42: poly_8bpp_l0_st0_asm(pDst, &gpu_unai.inn, count); break;
+	case 0x002: poly_utx_l0d0m0st0_asm(pDst, &gpu_unai.inn, count); break;
+	case 0x00a: poly_utx_l0d0m0st1_asm(pDst, &gpu_unai.inn, count); break;
+	case 0x01a: poly_utx_l0d0m0st3_asm(pDst, &gpu_unai.inn, count); break;
+	case 0x020: poly_4bp_l0d0m0std_asm(pDst, &gpu_unai.inn, count); break;
+	case 0x022: poly_4bp_l0d0m0st0_asm(pDst, &gpu_unai.inn, count); break;
+	case 0x040: poly_8bp_l0d0m0std_asm(pDst, &gpu_unai.inn, count); break;
+	case 0x042: poly_8bp_l0d0m0st0_asm(pDst, &gpu_unai.inn, count); break;
 #ifdef HAVE_ARMV6
-	case 0x12: poly_untex_st2_asm  (pDst, &gpu_unai.inn, count); break;
-	case 0x21: poly_4bpp_l1_std_asm(pDst, &gpu_unai.inn, count); break;
-	case 0x23: poly_4bpp_l1_st0_asm(pDst, &gpu_unai.inn, count); break;
-	case 0x41: poly_8bpp_l1_std_asm(pDst, &gpu_unai.inn, count); break;
-	case 0x43: poly_8bpp_l1_st0_asm(pDst, &gpu_unai.inn, count); break;
+	case 0x012: poly_utx_l0d0m0st2_asm(pDst, &gpu_unai.inn, count); break;
+	case 0x021: poly_4bp_l1d0m0std_asm(pDst, &gpu_unai.inn, count); break;
+	case 0x023: poly_4bp_l1d0m0st0_asm(pDst, &gpu_unai.inn, count); break;
+	case 0x041: poly_8bp_l1d0m0std_asm(pDst, &gpu_unai.inn, count); break;
+	case 0x043: poly_8bp_l1d0m0st0_asm(pDst, &gpu_unai.inn, count); break;
+	case 0x081: poly_utx_g1d0m0std_asm(pDst, &gpu_unai.inn, count); break;
+	case 0x0a1: poly_4bp_lgd0m0std_asm(pDst, &gpu_unai.inn, count); break;
+	case 0x0ab: poly_4bp_lgd0m0st1_asm(pDst, &gpu_unai.inn, count); break;
+	case 0x221: poly_4bp_l1d1m0std_asm(pDst, &gpu_unai.inn, count, DV(y)); break;
+	case 0x223: poly_4bp_l1d1m0st0_asm(pDst, &gpu_unai.inn, count, DV(y)); break;
+	case 0x241: poly_8bp_l1d1m0std_asm(pDst, &gpu_unai.inn, count, DV(y)); break;
+	case 0x243: poly_8bp_l1d1m0st0_asm(pDst, &gpu_unai.inn, count, DV(y)); break;
+	case 0x281: poly_utx_g1d1m0std_asm(pDst, &gpu_unai.inn, count, DV(y)); break;
+	case 0x2a1: poly_4bp_lgd1m0std_asm(pDst, &gpu_unai.inn, count, DV(y)); break;
+	case 0x2ab: poly_4bp_lgd1m0st1_asm(pDst, &gpu_unai.inn, count, DV(y)); break;
+	case 0x381: poly_utx_g1d1m1std_asm(pDst, &gpu_unai.inn, count, DV(y)); break;
 #endif
-	default:   gpuPolySpanFn<CF>(gpu_unai, pDst, count);
+	default:   gpuPolySpanFn<CF>(gpu_unai, pDst, count, y);
 	}
+#undef DV
 }
 #endif
 
-static void PolyNULL(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count)
+static void PolyNULL(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count, s32 y)
 {
 	#ifdef ENABLE_GPU_LOG_SUPPORT
 		fprintf(stdout,"PolyNULL()\n");
@@ -836,7 +792,7 @@ static void PolyNULL(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count)
 
 ///////////////////////////////////////////////////////////////////////////////
 //  Polygon innerloops driver
-typedef void (*PP)(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count);
+typedef void (*PP)(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count, s32 y);
 
 // Template instantiation helper macros
 #define TI(cf) gpuPolySpanFn<(cf)>
@@ -868,12 +824,12 @@ typedef void (*PP)(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count);
 	TN,            TN,            TI((ub)|0x6a), TI((ub)|0x6b), TN,            TN,            TI((ub)|0x6e), TI((ub)|0x6f), \
 	TN,            TN,            TI((ub)|0x72), TI((ub)|0x73), TN,            TN,            TI((ub)|0x76), TI((ub)|0x77), \
 	TN,            TN,            TI((ub)|0x7a), TI((ub)|0x7b), TN,            TN,            TI((ub)|0x7e), TI((ub)|0x7f), \
-	TN,            TI((ub)|0x81), TN,            TI((ub)|0x83), TN,            TI((ub)|0x85), TN,            TI((ub)|0x87), \
+	TN,            TA6((ub)|0x81),TN,            TI((ub)|0x83), TN,            TI((ub)|0x85), TN,            TI((ub)|0x87), \
 	TN,            TN,            TN,            TI((ub)|0x8b), TN,            TN,            TN,            TI((ub)|0x8f), \
 	TN,            TN,            TN,            TI((ub)|0x93), TN,            TN,            TN,            TI((ub)|0x97), \
 	TN,            TN,            TN,            TI((ub)|0x9b), TN,            TN,            TN,            TI((ub)|0x9f), \
-	TN,            TI((ub)|0xa1), TN,            TI((ub)|0xa3), TN,            TI((ub)|0xa5), TN,            TI((ub)|0xa7), \
-	TN,            TN,            TN,            TI((ub)|0xab), TN,            TN,            TN,            TI((ub)|0xaf), \
+	TN,            TA6((ub)|0xa1),TN,            TI((ub)|0xa3), TN,            TI((ub)|0xa5), TN,            TI((ub)|0xa7), \
+	TN,            TN,            TN,            TA6((ub)|0xab),TN,            TN,            TN,            TI((ub)|0xaf), \
 	TN,            TN,            TN,            TI((ub)|0xb3), TN,            TN,            TN,            TI((ub)|0xb7), \
 	TN,            TN,            TN,            TI((ub)|0xbb), TN,            TN,            TN,            TI((ub)|0xbf), \
 	TN,            TI((ub)|0xc1), TN,            TI((ub)|0xc3), TN,            TI((ub)|0xc5), TN,            TI((ub)|0xc7), \
@@ -885,9 +841,8 @@ typedef void (*PP)(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count);
 	TN,            TN,            TN,            TI((ub)|0xf3), TN,            TN,            TN,            TI((ub)|0xf7), \
 	TN,            TN,            TN,            TI((ub)|0xfb), TN,            TN,            TN,            TI((ub)|0xff)
 
-const PP gpuPolySpanDrivers[2048] = {
-	TIBLOCK(0<<8), TIBLOCK(1<<8), TIBLOCK(2<<8), TIBLOCK(3<<8),
-	TIBLOCK(4<<8), TIBLOCK(5<<8), TIBLOCK(6<<8), TIBLOCK(7<<8)
+const PP gpuPolySpanDrivers[1024] = {
+	TIBLOCK(0<<8), TIBLOCK(1<<8), TIBLOCK(2<<8), TIBLOCK(3<<8)
 };
 
 #undef TI
