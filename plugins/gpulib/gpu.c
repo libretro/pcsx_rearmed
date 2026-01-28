@@ -40,14 +40,30 @@ static void sync_renderer(struct psx_gpu *gpu)
     renderer_flush_queues();
 }
 
+static void sync_renderer_ecmds(struct psx_gpu *gpu)
+{
+  if (gpu_async_enabled(gpu))
+    gpu_async_sync_ecmds(gpu);
+  else
+    renderer_sync_ecmds(gpu->ex_regs);
+}
+
+static void sync_ecmds_status_bits(struct psx_gpu *gpu)
+{
+  gpu->status &= ~0x1fff;
+  gpu->status |= gpu->ex_regs[1] & 0x7ff;
+  gpu->status |= (gpu->ex_regs[6] & 3) << 11;
+}
+
 static noinline void do_cmd_reset(struct psx_gpu *gpu)
 {
   int dummy = 0;
 
-  if (unlikely(gpu->cmd_len > 0))
+  if (unlikely(gpu->cmd_len > 0)) {
     do_cmd_buffer(gpu, gpu->cmd_buffer, gpu->cmd_len, &dummy, &dummy);
+    sync_ecmds_status_bits(gpu);
+  }
   gpu->cmd_len = 0;
-  sync_renderer(gpu);
 
   if (unlikely(gpu->dma.h > 0))
     finish_vram_transfer(gpu, gpu->dma_start.is_read, 0);
@@ -59,6 +75,7 @@ static noinline void do_reset(struct psx_gpu *gpu)
   unsigned int i;
 
   do_cmd_reset(gpu);
+  sync_renderer(gpu);
 
   memset(gpu->regs, 0, sizeof(gpu->regs));
   for (i = 0; i < sizeof(gpu->ex_regs) / sizeof(gpu->ex_regs[0]); i++)
@@ -172,8 +189,36 @@ static noinline void update_height(struct psx_gpu *gpu)
   //  gpu->screen.y1, gpu->screen.y2, y, sh, vres);
 }
 
-static noinline void decide_frameskip(struct psx_gpu *gpu)
+static noinline void frameskip_prepare_noskip(struct psx_gpu *gpu)
 {
+  if (gpu->frameskip.ecmds_dirty_renderer) {
+    gpu->frameskip.ecmds_dirty_renderer = 0;
+    sync_renderer_ecmds(gpu);
+  }
+  if (gpu->frameskip.pending_fill[0] != 0) {
+    int dummy = 0;
+    if (gpu_async_enabled(gpu))
+      (void)gpu_async_do_cmd_list(gpu, gpu->frameskip.pending_fill, 3,
+          &dummy, &dummy, &dummy, &dummy);
+    else
+      renderer_do_cmd_list(gpu->frameskip.pending_fill, 3, gpu->ex_regs,
+          &dummy, &dummy, &dummy);
+    gpu->frameskip.pending_fill[0] = 0;
+  }
+}
+
+#define FRAMESKIP_MAX_FLIP_DELAY 5
+
+static noinline void decide_frameskip(struct psx_gpu *gpu, uint32_t flip_delay)
+{
+  if (flip_delay > FRAMESKIP_MAX_FLIP_DELAY) {
+    // don't skip if no updates for a while
+    gpu->frameskip.active = 0;
+    gpu->frameskip.cnt = 0;
+    gpu->frameskip.frame_ready = 1;
+    return;
+  }
+
   *gpu->frameskip.dirty = 1;
 
   if (gpu->frameskip.active)
@@ -183,6 +228,7 @@ static noinline void decide_frameskip(struct psx_gpu *gpu)
     gpu->frameskip.frame_ready = 1;
   }
 
+  // note: frontend/libretro only uses 'force'
   if (*gpu->frameskip.force)
     gpu->frameskip.active = 1;
   else if (!gpu->frameskip.active && *gpu->frameskip.advice)
@@ -191,30 +237,20 @@ static noinline void decide_frameskip(struct psx_gpu *gpu)
     gpu->frameskip.active = 1;
   else
     gpu->frameskip.active = 0;
-
-  if (!gpu->frameskip.active && gpu->frameskip.pending_fill[0] != 0) {
-    int dummy = 0;
-    if (gpu_async_enabled(gpu))
-      (void)gpu_async_do_cmd_list(gpu, gpu->frameskip.pending_fill, 3,
-              &dummy, &dummy, &dummy);
-    else
-      renderer_do_cmd_list(gpu->frameskip.pending_fill, 3, gpu->ex_regs,
-        &dummy, &dummy, &dummy);
-    gpu->frameskip.pending_fill[0] = 0;
-  }
 }
 
-static noinline int decide_frameskip_allow(struct psx_gpu *gpu)
+static noinline void check_draw_to_display(struct psx_gpu *gpu)
 {
-  // no frameskip if it decides to draw to display area,
-  // but not for interlace since it'll most likely always do that
   uint32_t cmd_e3 = gpu->ex_regs[3];
   uint32_t x = cmd_e3 & 0x3ff;
   uint32_t y = (cmd_e3 >> 10) & 0x3ff;
-  gpu->frameskip.allow = (gpu->status & PSX_GPU_STATUS_INTERLACE) ||
+  uint32_t no_intersect =
     (uint32_t)(x - gpu->screen.src_x) >= (uint32_t)gpu->screen.w ||
     (uint32_t)(y - gpu->screen.src_y) >= (uint32_t)gpu->screen.h;
-  return gpu->frameskip.allow;
+  gpu->state.draw_display_intersect = !no_intersect;
+  // no frameskip if it decides to draw to display area,
+  // but not for interlace since it'll most likely always do that
+  gpu->frameskip.allow = no_intersect || (gpu->status & PSX_GPU_STATUS_INTERLACE);
 }
 
 static void flush_cmd_buffer(struct psx_gpu *gpu);
@@ -330,7 +366,7 @@ void GPUwriteStatus(uint32_t data)
 {
   uint32_t cmd = data >> 24;
   uint32_t fb_dirty = 1;
-  int src_x, src_y;
+  int src_x, src_y, changed;
 
   if (cmd < ARRAY_SIZE(gpu.regs)) {
     if (cmd > 1 && cmd != 5 && gpu.regs[cmd] == data)
@@ -361,21 +397,32 @@ void GPUwriteStatus(uint32_t data)
       break;
     case 0x05:
       src_x = data & 0x3ff; src_y = (data >> 10) & 0x1ff;
-      if (src_x != gpu.screen.src_x || src_y != gpu.screen.src_y) {
+      changed = src_x != gpu.screen.src_x || src_y != gpu.screen.src_y;
+      // last_flip_frame check allows frameskip on dheight games
+      // that always set the same display area address
+      if (changed || gpu.frameskip.last_flip_frame != *gpu.state.frame_count)
+      {
+        gpu.state.fb_dirty_display_area |= gpu.state.fb_dirty;
+        gpu.state.fb_dirty = 0;
         gpu.screen.src_x = src_x;
         gpu.screen.src_y = src_y;
+        check_draw_to_display(&gpu);
+        if (gpu.frameskip.set) {
+          uint32_t flip_delay = *gpu.state.frame_count - gpu.frameskip.last_flip_frame;
+          if (flip_delay)
+            decide_frameskip(&gpu, flip_delay);
+          if (!gpu.frameskip.active || !gpu.frameskip.allow)
+            frameskip_prepare_noskip(&gpu);
+        }
+        gpu.frameskip.last_flip_frame = *gpu.state.frame_count;
+      }
+      if (changed) {
         if (gpu_async_enabled(&gpu))
           gpu_async_notify_screen_change(&gpu);
         else
           renderer_notify_screen_change(&gpu.screen);
-        if (gpu.frameskip.set) {
-          decide_frameskip_allow(&gpu);
-          if (gpu.frameskip.last_flip_frame != *gpu.state.frame_count) {
-            decide_frameskip(&gpu);
-            gpu.frameskip.last_flip_frame = *gpu.state.frame_count;
-          }
-        }
       }
+      fb_dirty = 0;
       break;
     case 0x06:
       gpu.screen.x1 = data & 0xfff;
@@ -403,7 +450,7 @@ void GPUwriteStatus(uint32_t data)
       break;
   }
 
-  gpu.state.fb_dirty |= fb_dirty;
+  gpu.state.fb_dirty_display_area |= fb_dirty;
 
 #ifdef GPUwriteStatus_ext
   GPUwriteStatus_ext(data);
@@ -563,7 +610,8 @@ static void finish_vram_transfer(struct psx_gpu *gpu, int is_read, int is_async)
     log_io(gpu, "dma %3d,%3d %dx%d scr %3d,%3d %3dx%3d -> dirty %d\n",
       gpu->dma_start.x, gpu->dma_start.y, gpu->dma_start.w, gpu->dma_start.h,
       gpu->screen.src_x, gpu->screen.src_y, gpu->screen.hres, gpu->screen.vres, !not_dirty);
-    gpu->state.fb_dirty |= !not_dirty;
+    gpu->state.fb_dirty_display_area |= !not_dirty;
+    gpu->state.fb_dirty = 1;
     if (!is_async)
       renderer_update_caches(gpu->dma_start.x, gpu->dma_start.y,
                              gpu->dma_start.w, gpu->dma_start.h, 0);
@@ -627,11 +675,10 @@ static noinline int do_cmd_list_skip(struct psx_gpu *gpu, uint32_t *data, int li
 {
   uint32_t cyc_sum = 0, cyc = *cpu_cycles_last;
   int cmd = 0, pos, len;
-  int skip = 1;
 
   gpu->frameskip.pending_fill[0] = 0;
 
-  for (pos = 0; pos < list_len && skip; pos += len)
+  for (pos = 0; pos < list_len; pos += len)
   {
     uint32_t *list = data + pos;
     const int16_t *slist = (void *)list;
@@ -653,7 +700,7 @@ static noinline int do_cmd_list_skip(struct psx_gpu *gpu, uint32_t *data, int li
         {
           // clearing something large, don't skip
           if (gpu_async_enabled(gpu))
-            (void)gpu_async_do_cmd_list(gpu, list, 3, &dummy, &dummy, &dummy);
+            (void)gpu_async_do_cmd_list(gpu, list, 3, &dummy, &dummy, &dummy, &dummy);
           else
             renderer_do_cmd_list(list, 3, gpu->ex_regs, &dummy, &dummy, &dummy);
         }
@@ -674,6 +721,7 @@ static noinline int do_cmd_list_skip(struct psx_gpu *gpu, uint32_t *data, int li
       do_texpage:
         gpu->ex_regs[1] &= ~0x1ff;
         gpu->ex_regs[1] |= (LE32TOH(list[4 + ((cmd >> 4) & 1)]) >> 16) & 0x1ff;
+        gpu->frameskip.ecmds_dirty_renderer = 1;
         break;
       case 0x40 ... 0x47:
         gput_sum(cyc_sum, cyc, gput_line(0));
@@ -731,11 +779,19 @@ static noinline int do_cmd_list_skip(struct psx_gpu *gpu, uint32_t *data, int li
       case 0xc0 ... 0xdf: // vid -> sys
         goto breakloop;
       case 0xe3:
-        skip = decide_frameskip_allow(gpu);
-        // fallthrough
+        gpu->ex_regs[cmd & 7] = LE32TOH(list[0]);
+        gpu->frameskip.ecmds_dirty_renderer = 1;
+        check_draw_to_display(gpu);
+        if (!gpu->frameskip.allow) {
+          frameskip_prepare_noskip(gpu);
+          pos += len;
+          goto breakloop;
+        }
+        break;
       case 0xe0 ... 0xe2:
       case 0xe4 ... 0xe7:
         gpu->ex_regs[cmd & 7] = LE32TOH(list[0]);
+        gpu->frameskip.ecmds_dirty_renderer = 1;
         break;
       default:
         break;
@@ -743,10 +799,6 @@ static noinline int do_cmd_list_skip(struct psx_gpu *gpu, uint32_t *data, int li
   }
 
 breakloop:
-  if (gpu_async_enabled(gpu))
-    gpu_async_sync_ecmds(gpu);
-  else
-    renderer_sync_ecmds(gpu->ex_regs);
   *cpu_cycles_sum_out += cyc_sum;
   *cpu_cycles_last = cyc;
   *last_cmd = cmd;
@@ -815,16 +867,12 @@ static noinline int do_cmd_buffer(struct psx_gpu *gpu, uint32_t *data, int count
       continue;
     }
 
-    if (gpu->frameskip.active &&
-        (gpu->frameskip.allow || ((LE32TOH(data[pos]) >> 24) & 0xf0) == 0xe0)) {
-      // 0xex cmds might affect frameskip.allow, so pass to do_cmd_list_skip
+    if (gpu->frameskip.active && gpu->frameskip.allow)
       pos += do_cmd_list_skip(gpu, data + pos, count - pos,
                cycles_sum, cycles_last, &cmd);
-    }
     else if (gpu_async_enabled(gpu)) {
       pos += gpu_async_do_cmd_list(gpu, data + pos, count - pos,
-               cycles_sum, cycles_last, &cmd);
-      vram_dirty = 1;
+               cycles_sum, cycles_last, &cmd, &vram_dirty);
     }
     else {
       pos += renderer_do_cmd_list(data + pos, count - pos, gpu->ex_regs,
@@ -837,14 +885,12 @@ static noinline int do_cmd_buffer(struct psx_gpu *gpu, uint32_t *data, int count
       break;
   }
 
-  gpu->status &= ~0x1fff;
-  gpu->status |= gpu->ex_regs[1] & 0x7ff;
-  gpu->status |= (gpu->ex_regs[6] & 3) << 11;
+  // this is here because the renderer doesn't tell us if it saw e3
+  if (unlikely(gpu->frameskip.set && old_e3 != gpu->ex_regs[3]))
+    check_draw_to_display(gpu);
 
+  gpu->state.fb_dirty_display_area |= vram_dirty & gpu->state.draw_display_intersect;
   gpu->state.fb_dirty |= vram_dirty;
-
-  if (old_e3 != gpu->ex_regs[3])
-    decide_frameskip_allow(gpu);
 
   return count - pos;
 }
@@ -875,14 +921,18 @@ void GPUwriteDataMem(uint32_t *mem, int count)
   left = do_cmd_buffer(&gpu, mem, count, &dummy, &dummy);
   if (left)
     log_anomaly(&gpu, "GPUwriteDataMem: discarded %d/%d words\n", left, count);
+
+  sync_ecmds_status_bits(&gpu);
 }
 
 void GPUwriteData(uint32_t data)
 {
   log_io(&gpu, "gpu_write %08x\n", data);
   gpu.cmd_buffer[gpu.cmd_len++] = HTOLE32(data);
-  if (gpu.cmd_len >= CMD_BUFFER_LEN)
+  if (gpu.cmd_len >= CMD_BUFFER_LEN) {
     flush_cmd_buffer(&gpu);
+    sync_ecmds_status_bits(&gpu);
+  }
 }
 
 long GPUdmaChain(uint32_t *rambase, uint32_t start_addr,
@@ -950,6 +1000,8 @@ long GPUdmaChain(uint32_t *rambase, uint32_t start_addr,
     }
   }
 
+  sync_ecmds_status_bits(&gpu);
+
   //printf(" -> %d %d\n", cpu_cycles_sum, cpu_cycles_last);
   gpu.state.last_list.frame = *gpu.state.frame_count;
   gpu.state.last_list.hcnt = *gpu.state.hcnt;
@@ -966,8 +1018,10 @@ void GPUreadDataMem(uint32_t *mem, int count)
 {
   log_io(&gpu, "gpu_dma_read  %p %d\n", mem, count);
 
-  if (unlikely(gpu.cmd_len > 0))
+  if (unlikely(gpu.cmd_len > 0)) {
     flush_cmd_buffer(&gpu);
+    sync_ecmds_status_bits(&gpu);
+  }
 
   if (gpu.dma.h)
     do_vram_io(&gpu, mem, count, 1);
@@ -977,8 +1031,10 @@ uint32_t GPUreadData(void)
 {
   uint32_t ret;
 
-  if (unlikely(gpu.cmd_len > 0))
+  if (unlikely(gpu.cmd_len > 0)) {
     flush_cmd_buffer(&gpu);
+    sync_ecmds_status_bits(&gpu);
+  }
 
   ret = gpu.gp0;
   if (gpu.dma.h) {
@@ -995,8 +1051,10 @@ uint32_t GPUreadStatus(void)
 {
   uint32_t ret;
 
-  if (unlikely(gpu.cmd_len > 0))
+  if (unlikely(gpu.cmd_len > 0)) {
     flush_cmd_buffer(&gpu);
+    sync_ecmds_status_bits(&gpu);
+  }
 
   ret = gpu.status;
   log_io(&gpu, "gpu_read_status %08x\n", ret);
@@ -1009,8 +1067,10 @@ long GPUfreeze(uint32_t type, GPUFreeze_t *freeze)
 
   switch (type) {
     case 1: // save
-      if (gpu.cmd_len > 0)
+      if (gpu.cmd_len > 0) {
         flush_cmd_buffer(&gpu);
+        sync_ecmds_status_bits(&gpu);
+      }
 
       sync_renderer(&gpu);
       memcpy(freeze->psxVRam, gpu.vram, 1024 * 512 * 2);
@@ -1038,47 +1098,61 @@ long GPUfreeze(uint32_t type, GPUFreeze_t *freeze)
 
 void GPUupdateLace(void)
 {
-  int updated = 0;
+  int delay_vout_update = 0;
+  int updated = 1;
 
-  if (gpu.cmd_len > 0)
+  if (gpu.frameskip.set) {
+    uint32_t flip_delay = *gpu.state.frame_count - gpu.frameskip.last_flip_frame;
+    if (gpu_async_enabled(&gpu))
+      gpu_async_try_delayed_flip(&gpu, 0);
+    if (flip_delay > FRAMESKIP_MAX_FLIP_DELAY) {
+      gpu.frameskip.frame_ready = 1;
+      if (gpu.frameskip.active) {
+        gpu.frameskip.active = 0;
+        frameskip_prepare_noskip(&gpu);
+      }
+    }
+  }
+
+  if (gpu.cmd_len > 0) {
     flush_cmd_buffer(&gpu);
+    sync_ecmds_status_bits(&gpu);
+  }
 
 #ifndef RAW_FB_DISPLAY
   if (gpu.status & PSX_GPU_STATUS_BLANKING) {
     if (!gpu.state.blanked) {
-      vout_blank();
+      vout_blank(&gpu);
       gpu.state.blanked = 1;
-      gpu.state.fb_dirty = 1;
+      gpu.state.fb_dirty_display_area = 1;
     }
     return;
   }
 
-  if (!gpu.state.fb_dirty)
+  if (!gpu.state.fb_dirty_display_area)
     return;
-#endif
 
   if (gpu.frameskip.set) {
-    if (!gpu.frameskip.frame_ready) {
-      if (*gpu.state.frame_count - gpu.frameskip.last_flip_frame < 9)
-        return;
-      gpu.frameskip.active = 0;
-    }
+    if (!gpu.frameskip.frame_ready)
+      return;
     gpu.frameskip.frame_ready = 0;
   }
+#endif
 
   if (gpu_async_enabled(&gpu))
-    gpu_async_sync_scanout(&gpu);
+    delay_vout_update = gpu_async_sync_scanout(&gpu);
   else
     renderer_flush_queues();
 
-  updated = vout_update();
+  if (!delay_vout_update)
+    updated = vout_update(&gpu, gpu.screen.src_x, gpu.screen.src_y);
   if (gpu.state.enhancement_active && !gpu.state.enhancement_was_active) {
     gpu_async_sync(&gpu);
     renderer_update_caches(0, 0, 1024, 512, 1);
   }
   gpu.state.enhancement_was_active = gpu.state.enhancement_active;
   if (updated) {
-    gpu.state.fb_dirty = 0;
+    gpu.state.fb_dirty_display_area = 0;
     gpu.state.blanked = 0;
   }
 }
@@ -1098,8 +1172,10 @@ void GPUvBlank(int is_vblank, int lcf)
   if (interlace || interlace != gpu.state.old_interlace) {
     gpu.state.old_interlace = interlace;
 
-    if (gpu.cmd_len > 0)
+    if (gpu.cmd_len > 0) {
       flush_cmd_buffer(&gpu);
+      sync_ecmds_status_bits(&gpu);
+    }
     if (gpu_async_enabled(&gpu))
       gpu_async_set_interlace(&gpu, interlace, !lcf);
     else {
@@ -1125,6 +1201,7 @@ void GPUrearmedCallbacks(const struct rearmed_cbs *cbs)
   gpu.frameskip.dirty = (void *)&cbs->fskip_dirty;
   gpu.frameskip.active = 0;
   gpu.frameskip.frame_ready = 1;
+  gpu.frameskip.last_flip_frame = *cbs->gpu_frame_count - FRAMESKIP_MAX_FLIP_DELAY - 1;
   gpu.state.hcnt = (uint32_t *)cbs->gpu_hcnt;
   gpu.state.frame_count = (uint32_t *)cbs->gpu_frame_count;
   gpu.state.allow_interlace = cbs->gpu_neon.allow_interlace;
@@ -1156,6 +1233,7 @@ void GPUrearmedCallbacks(const struct rearmed_cbs *cbs)
   if (cbs->pl_vout_set_raw_vram)
     cbs->pl_vout_set_raw_vram(gpu.vram);
   sync_renderer(&gpu);
+  sync_renderer_ecmds(&gpu);
   renderer_set_config(cbs);
   vout_set_config(cbs);
 

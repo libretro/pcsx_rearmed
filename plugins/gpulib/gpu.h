@@ -18,7 +18,7 @@
 //#define RAW_FB_DISPLAY
 
 #define gpu_log(gpu, fmt, ...) \
-  printf("%d:%03d: " fmt, *(gpu)->state.frame_count, *(gpu)->state.hcnt, ##__VA_ARGS__)
+  SysPrintf("%d:%03d: " fmt, *(gpu)->state.frame_count, *(gpu)->state.hcnt, ##__VA_ARGS__)
 
 #ifdef LOG_UNHANDLED
 #define log_anomaly gpu_log
@@ -71,7 +71,7 @@ struct psx_gpu {
   uint16_t *vram;
   uint32_t status;
   uint32_t gp0;
-  uint32_t ex_regs[8];
+  uint32_t ex_regs[8];  // in native endian
   struct psx_gpu_screen screen;
   struct {
     int x, y, w, h;
@@ -81,6 +81,8 @@ struct psx_gpu {
   uint32_t zero;
   struct {
     uint32_t fb_dirty:1;
+    uint32_t fb_dirty_display_area:1;
+    uint32_t draw_display_intersect:1;
     uint32_t old_interlace:1;
     uint32_t allow_interlace:2;
     uint32_t blanked:1;
@@ -112,6 +114,7 @@ struct psx_gpu {
     uint32_t active:1;
     uint32_t allow:1;
     uint32_t frame_ready:1;
+    uint32_t ecmds_dirty_renderer:1;
     const int *advice;
     const int *force;
     int *dirty;
@@ -150,8 +153,8 @@ void renderer_notify_screen_change(const struct psx_gpu_screen *screen);
 
 int  vout_init(void);
 int  vout_finish(void);
-int  vout_update(void);
-void vout_blank(void);
+int  vout_update(struct psx_gpu *gpu, int src_x, int src_y);
+void vout_blank(struct psx_gpu *gpu);
 void vout_set_config(const struct rearmed_cbs *config);
 
 // helpers
