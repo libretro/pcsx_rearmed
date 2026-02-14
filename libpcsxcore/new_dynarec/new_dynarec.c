@@ -2967,7 +2967,7 @@ static void *emit_fastpath_cmp_jump(int i, const struct regstat *i_regs,
     type=0;
   }
   else if(type==MTYPE_1F80) { // scratchpad
-    if (psxH == (void *)0x1f800000) {
+    if (psxRegs.ptrs.psxH == (void *)0x1f800000) {
       host_tempreg_acquire();
       emit_xorimm(addr,0x1f800000,HOST_TEMPREG);
       emit_cmpimm(HOST_TEMPREG,0x1000);
@@ -6470,11 +6470,12 @@ void new_dynarec_init(void)
 #endif
   arch_init();
   new_dynarec_test();
-  ram_offset = (uintptr_t)psxM - 0x80000000;
+  ram_offset = (uintptr_t)psxRegs.ptrs.psxM - 0x80000000;
   if (ram_offset != 0)
     SysPrintf("RAM is not directly mapped\n");
   SysPrintf("Mapped (RAM/scrp/ROM/LUTs/TC):\n");
-  SysPrintf("%p/%p/%p/%p/%p\n", psxM, psxH, psxR, mem_rtab, out);
+  SysPrintf("%p/%p/%p/%p/%p\n", psxRegs.ptrs.psxM, psxRegs.ptrs.psxH,
+    psxRegs.ptrs.psxR, mem_rtab, out);
 }
 
 void new_dynarec_cleanup(void)
@@ -6513,7 +6514,7 @@ static u_int *get_source_start(u_int addr, u_int *limit)
   {
     // used for BIOS calls mostly?
     *limit = (addr & 0xa0600000) + 0x00200000;
-    return (u_int *)(psxM + (addr & 0x1fffff));
+    return (u_int *)(psxRegs.ptrs.psxM + (addr & 0x1fffff));
   }
   else if (
     (0x9fc00000u <= addr && addr < 0x9fc80000u) ||
@@ -6526,7 +6527,7 @@ static u_int *get_source_start(u_int addr, u_int *limit)
     //  cycle_multiplier_active = 200;
 
     *limit = (addr & 0xfff00000) | 0x80000;
-    return (u_int *)((u_char *)psxR + (addr&0x7ffff));
+    return (u_int *)((u_char *)psxRegs.ptrs.psxR + (addr&0x7ffff));
   }
   return NULL;
 }
@@ -6682,7 +6683,7 @@ static noinline void do_vsync(int i)
 
   if (!is_ram_addr(addr))
       return;
-  str = (char *)psxM + (addr & 0x1fffff);
+  str = (char *)psxRegs.ptrs.psxM + (addr & 0x1fffff);
   if (!str || strncmp(str, "VSync: timeout", 14))
     return;
   // jal clearPad, jal clearRCnt; j return; nop

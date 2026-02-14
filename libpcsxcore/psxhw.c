@@ -29,7 +29,7 @@
 #include "../include/compiler_features.h"
 
 void psxHwReset() {
-	memset(psxH, 0, 0x10000);
+	memset(psxRegs.ptrs.psxH, 0, 0x10000);
 
 	mdecInit(); // initialize mdec decoder
 	cdrReset();
@@ -437,6 +437,11 @@ void psxHwWrite32(u32 add, u32 value) {
 	case 0x1120: psxRcntWcount(2, value & 0xffff); return;
 	case 0x1124: psxRcntWmode(2, value); return;
 	case 0x1128: psxRcntWtarget(2, value & 0xffff); return;
+
+	case 0x1060:
+		if ((value >> 9) != 5)
+			log_unhandled("unhandled RAM_SIZE %08x @%08x\n", value, psxRegs.pc);
+		break;
 
 	case 0x1044:
 	case 0x1048:

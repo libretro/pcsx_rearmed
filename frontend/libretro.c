@@ -1732,10 +1732,10 @@ static void set_retro_memmap(void)
    uint64_t flags_ram = RETRO_MEMDESC_SYSTEM_RAM;
    struct retro_memory_map retromap = { 0 };
    struct retro_memory_descriptor descs[] = {
-      { flags_ram, psxM, 0, 0x00000000, 0x5fe00000, 0, 0x200000 },
-      { flags_ram, psxH, 0, 0x1f800000, 0x7ffffc00, 0, 0x000400 },
+      { flags_ram, psxRegs.ptrs.psxM, 0, 0x00000000, 0x5fe00000, 0, 0x200000 },
+      { flags_ram, psxRegs.ptrs.psxH, 0, 0x1f800000, 0x7ffffc00, 0, 0x000400 },
       // not ram but let the frontend patch it if it wants; should be last
-      { flags_ram, psxR, 0, 0x1fc00000, 0x5ff80000, 0, 0x080000 },
+      { flags_ram, psxRegs.ptrs.psxR, 0, 0x1fc00000, 0x5ff80000, 0, 0x080000 },
    };
 
    retromap.descriptors = descs;
@@ -2091,7 +2091,7 @@ void *retro_get_memory_data(unsigned id)
    if (id == RETRO_MEMORY_SAVE_RAM)
       return Mcd1Data;
    else if (id == RETRO_MEMORY_SYSTEM_RAM)
-      return psxM;
+      return psxRegs.ptrs.psxM;
    else
       return NULL;
 }

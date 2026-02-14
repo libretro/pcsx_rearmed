@@ -703,7 +703,7 @@ struct misc_save_data {
 #define EX_SCREENPIC_SIZE (128 * 96 * 3)
 
 int SaveState(const char *file) {
-	struct misc_save_data *misc = (void *)(psxH + 0xf000);
+	struct misc_save_data *misc = (void *)(psxRegs.ptrs.psxH + 0xf000);
 	struct origin_info oi = { 0, };
 	GPUFreeze_t *gpufP = NULL;
 	SPUFreezeHdr_t spufH;
@@ -757,9 +757,9 @@ int SaveState(const char *file) {
 	if (Config.HLE)
 		psxBiosFreeze(1);
 
-	SaveFuncs.write(f, psxM, 0x00200000);
-	SaveFuncs.write(f, psxR, 0x00080000);
-	SaveFuncs.write(f, psxH, 0x00010000);
+	SaveFuncs.write(f, psxRegs.ptrs.psxM, 0x00200000);
+	SaveFuncs.write(f, psxRegs.ptrs.psxR, 0x00080000);
+	SaveFuncs.write(f, psxRegs.ptrs.psxH, 0x00010000);
 	// only partial save of psxRegisters to maintain savestate compat
 	SaveFuncs.write(f, &psxRegs, offsetof(psxRegisters, gteBusyCycle));
 
@@ -797,7 +797,7 @@ cleanup:
 }
 
 int LoadState(const char *file) {
-	struct misc_save_data *misc = (void *)(psxH + 0xf000);
+	struct misc_save_data *misc = (void *)(psxRegs.ptrs.psxH + 0xf000);
 	u32 biosBranchCheckOld = psxRegs.biosBranchCheck;
 	void *f;
 	GPUFreeze_t *gpufP = NULL;
@@ -841,9 +841,9 @@ int LoadState(const char *file) {
 	// ex-ScreenPic space
 	SaveFuncs.seek(f, EX_SCREENPIC_SIZE, SEEK_CUR);
 
-	SaveFuncs.read(f, psxM, 0x00200000);
-	SaveFuncs.read(f, psxR, 0x00080000);
-	SaveFuncs.read(f, psxH, 0x00010000);
+	SaveFuncs.read(f, psxRegs.ptrs.psxM, 0x00200000);
+	SaveFuncs.read(f, psxRegs.ptrs.psxR, 0x00080000);
+	SaveFuncs.read(f, psxRegs.ptrs.psxH, 0x00010000);
 	SaveFuncs.read(f, &psxRegs, offsetof(psxRegisters, gteBusyCycle));
 	psxRegs.gteBusyCycle = psxRegs.cycle;
 	psxRegs.branching = 0;

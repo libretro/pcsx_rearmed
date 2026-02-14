@@ -29,6 +29,7 @@
 #include "psxbios.h"
 #include "psxevents.h"
 #include "../include/compiler_features.h"
+#include <stddef.h>
 #include <assert.h>
 
 #ifndef ARRAY_SIZE
@@ -64,7 +65,7 @@ void psxReset() {
 
 	psxMemReset();
 
-	memset(&psxRegs, 0, sizeof(psxRegs));
+	memset(&psxRegs, 0, offsetof(psxRegisters, ptrs));
 
 	psxRegs.pc = 0xbfc00000; // Start in bootstrap
 

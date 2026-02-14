@@ -130,8 +130,8 @@ static void map_rcnt_rcount1(u32 mode)
 static void map_rcnt_rcount2(u32 mode)
 {
 	if ((mode & 7) == 1 || (mode & 7) == 7) { // sync mode
-		map_item(&mem_iortab[IOMEM32(0x1120)], &psxH[0x1000], 0);
-		map_item(&mem_iortab[IOMEM16(0x1120)], &psxH[0x1000], 0);
+		map_item(&mem_iortab[IOMEM32(0x1120)], &psxRegs.ptrs.psxH[0x1000], 0);
+		map_item(&mem_iortab[IOMEM16(0x1120)], &psxRegs.ptrs.psxH[0x1000], 0);
 	}
 	else if (mode & 0x200) { // clk/8
 		map_item(&mem_iortab[IOMEM32(0x1120)], rcnt2_read_count_m1, 1);
@@ -214,9 +214,10 @@ void new_dyna_pcsx_mem_isolate(int enable)
 	}
 	else {
 		for (i = 0; i < (0x800000 >> 12); i++) {
-			map_l1_mem(mem_writetab, i, 0x80000000, 0x200000, psxM);
-			map_l1_mem(mem_writetab, i, 0x00000000, 0x200000, psxM);
-			map_l1_mem(mem_writetab, i, 0xa0000000, 0x200000, psxM);
+			void *ram = psxRegs.ptrs.psxM;
+			map_l1_mem(mem_writetab, i, 0x80000000, 0x200000, ram);
+			map_l1_mem(mem_writetab, i, 0x00000000, 0x200000, ram);
+			map_l1_mem(mem_writetab, i, 0xa0000000, 0x200000, ram);
 		}
 	}
 }
@@ -308,25 +309,26 @@ void new_dyna_pcsx_mem_init(void)
 		map_item(&mem_writetab[i], mem_unmwtab, 1);
 	}
 
-	// RAM and it's mirrors
+	// RAM and its mirrors
 	for (i = 0; i < (0x800000 >> 12); i++) {
-		map_l1_mem(mem_readtab,  i, 0x80000000, 0x200000, psxM);
-		map_l1_mem(mem_readtab,  i, 0x00000000, 0x200000, psxM);
-		map_l1_mem(mem_readtab,  i, 0xa0000000, 0x200000, psxM);
+		void *ram = psxRegs.ptrs.psxM;
+		map_l1_mem(mem_readtab,  i, 0x80000000, 0x200000, ram);
+		map_l1_mem(mem_readtab,  i, 0x00000000, 0x200000, ram);
+		map_l1_mem(mem_readtab,  i, 0xa0000000, 0x200000, ram);
 	}
 	new_dyna_pcsx_mem_isolate(0);
 
-	// BIOS and it's mirrors
+	// BIOS and its mirrors
 	for (i = 0; i < (0x80000 >> 12); i++) {
-		map_l1_mem(mem_readtab, i, 0x1fc00000, 0x80000, psxR);
-		map_l1_mem(mem_readtab, i, 0xbfc00000, 0x80000, psxR);
+		map_l1_mem(mem_readtab, i, 0x1fc00000, 0x80000, psxRegs.ptrs.psxR);
+		map_l1_mem(mem_readtab, i, 0xbfc00000, 0x80000, psxRegs.ptrs.psxR);
 	}
 
 	// scratchpad
-	map_l1_mem(mem_readtab, 0, 0x1f800000, 0x1000, psxH);
-	map_l1_mem(mem_readtab, 0, 0x9f800000, 0x1000, psxH);
-	map_l1_mem(mem_writetab, 0, 0x1f800000, 0x1000, psxH);
-	map_l1_mem(mem_writetab, 0, 0x9f800000, 0x1000, psxH);
+	map_l1_mem(mem_readtab, 0, 0x1f800000, 0x1000, psxRegs.ptrs.psxH);
+	map_l1_mem(mem_readtab, 0, 0x9f800000, 0x1000, psxRegs.ptrs.psxH);
+	map_l1_mem(mem_writetab, 0, 0x1f800000, 0x1000, psxRegs.ptrs.psxH);
+	map_l1_mem(mem_writetab, 0, 0x9f800000, 0x1000, psxRegs.ptrs.psxH);
 
 	// I/O
 	map_item(&mem_readtab[0x1f801000u >> 12], mem_iortab, 1);
@@ -343,16 +345,16 @@ void new_dyna_pcsx_mem_init(void)
 
 	// fill IO tables
 	for (i = 0; i < 0x1000/4; i++) {
-		map_item(&mem_iortab[i], &psxH[0x1000], 0);
-		map_item(&mem_iowtab[i], &psxH[0x1000], 0);
+		map_item(&mem_iortab[i], &psxRegs.ptrs.psxH[0x1000], 0);
+		map_item(&mem_iowtab[i], &psxRegs.ptrs.psxH[0x1000], 0);
 	}
 	for (; i < 0x1000/4 + 0x1000/2; i++) {
-		map_item(&mem_iortab[i], &psxH[0x1000], 0);
-		map_item(&mem_iowtab[i], &psxH[0x1000], 0);
+		map_item(&mem_iortab[i], &psxRegs.ptrs.psxH[0x1000], 0);
+		map_item(&mem_iowtab[i], &psxRegs.ptrs.psxH[0x1000], 0);
 	}
 	for (; i < 0x1000/4 + 0x1000/2 + 0x1000; i++) {
-		map_item(&mem_iortab[i], &psxH[0x1000], 0);
-		map_item(&mem_iowtab[i], &psxH[0x1000], 0);
+		map_item(&mem_iortab[i], &psxRegs.ptrs.psxH[0x1000], 0);
+		map_item(&mem_iowtab[i], &psxRegs.ptrs.psxH[0x1000], 0);
 	}
 
 	map_item(&mem_iortab[IOMEM32(0x1040)], io_read_sio32, 1);

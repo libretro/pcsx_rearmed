@@ -1,3 +1,5 @@
+#ifndef PCSX_COMPILER_FEATURES_H_
+#define PCSX_COMPILER_FEATURES_H_
 
 #ifdef __GNUC__
 # define likely(x)       __builtin_expect((x),1)
@@ -9,12 +11,14 @@
 #  define noinline       __attribute__((noinline,noclone))
 # endif
 # define attr_unused     __attribute__((unused))
+# define nosanitize(x)   __attribute__((no_sanitize(x)))
 #else
 # define likely(x)       (x)
 # define unlikely(x)     (x)
 # define preload         (x)
 # define noinline
 # define attr_unused
+# define nosanitize(x)
 #endif
 
 // doesn't work on Android, mingw...
@@ -36,3 +40,4 @@
 #define sub_overflow(a, b, r) ({r = (u32)a - (u32)b; (a ^  b) & (a ^ r) & (1u<<31);})
 #endif
 
+#endif // PCSX_COMPILER_FEATURES_H_

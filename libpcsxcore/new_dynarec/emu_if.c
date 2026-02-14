@@ -616,7 +616,7 @@ static int ari64_init()
 #ifdef DRC_DBG
 	memcpy(gte_handlers_nf, gte_handlers, sizeof(gte_handlers_nf));
 #endif
-	psxH_ptr = psxH;
+	psxH_ptr = psxRegs.ptrs.psxH;
 	zeromem_ptr = zero_mem;
 	scratch_buf_ptr = scratch_buf; // for gte_neon.S
 

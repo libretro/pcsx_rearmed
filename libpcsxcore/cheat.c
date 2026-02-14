@@ -232,7 +232,7 @@ void ApplyCheats() {
 					break;
 
 				case CHEAT_SCRATCHPAD16: // 1F
-					psxHs16ref(addr) = SWAPu16(val);
+					psxHu16ref(addr) = SWAPu16(val);
 					break;
 
 				case CHEAT_INC16:
@@ -513,7 +513,7 @@ void FreeCheatSearchMem() {
 
 void CheatSearchBackupMemory() {
 	if (prevM != NULL) {
-		memcpy(prevM, psxM, 0x200000);
+		memcpy(prevM, psxRegs.ptrs.psxM, 0x200000);
 	}
 }
 

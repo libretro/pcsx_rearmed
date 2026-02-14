@@ -45,7 +45,7 @@ static inline void *getDmaRam(u32 madr, u32 *max_words)
 	if (!(madr & 0x800000)) {
 		madr &= 0x1ffffc;
 		*max_words = (0x200000 - madr) / 4;
-		return psxM + madr;
+		return psxRegs.ptrs.psxM + madr;
 	}
 	return INVALID_PTR;
 }

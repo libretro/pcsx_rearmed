@@ -200,7 +200,7 @@ void psxDma2(u32 madr, u32 bcr, u32 chcr) { // GPU
 				do_walking = Config.hacks.gpu_slow_list_walking;
 			madr_next_p = do_walking ? &madr_next : NULL;
 
-			cycles_sum = GPU_dmaChain((u32 *)psxM, madr & 0x1fffff,
+			cycles_sum = GPU_dmaChain((u32 *)psxRegs.ptrs.psxM, madr & 0x1fffff,
 					madr_next_p, &cycles_last_cmd);
 
 			HW_DMA2_MADR = SWAPu32(madr_next);
@@ -234,8 +234,8 @@ void gpuInterrupt() {
 
 		do {
 			cycles_sum += cycles_last_cmd;
-			cycles_sum += GPU_dmaChain((u32 *)psxM, madr_next & 0x1fffff,
-					&madr_next, &cycles_last_cmd);
+			cycles_sum += GPU_dmaChain((u32 *)psxRegs.ptrs.psxM,
+					madr_next & 0x1fffff, &madr_next, &cycles_last_cmd);
 		}
 		while (cycles_sum <= 0 && !(madr_next & 0x800000));
 		HW_DMA2_MADR = SWAPu32(madr_next);
@@ -275,7 +275,7 @@ void psxDma6(u32 madr, u32 bcr, u32 chcr) {
 		// already 32-bit size
 		words = bcr;
 
-		while (bcr-- && mem > (u32 *)psxM) {
+		while (bcr-- && mem > (u32 *)psxRegs.ptrs.psxM) {
 			*mem-- = SWAP32((madr - 4) & 0xffffff);
 			madr -= 4;
 		}

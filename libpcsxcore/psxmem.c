@@ -24,6 +24,7 @@
 // TODO: Implement caches & cycle penalty.
 
 #include <stdio.h>
+#include <assert.h>
 #include "psxmem.h"
 #include "psxmem_map.h"
 #include "r3000a.h"
@@ -33,6 +34,7 @@
 
 #include "lightrec/mem.h"
 #include "memmap.h"
+#include "compiler_features.h"
 
 #ifdef USE_LIBRETRO_VFS
 #include <streams/file_stream_transforms.h>
@@ -130,14 +132,6 @@ void psxUnmap(void *ptr, size_t size, enum psxMapTag tag)
 	psxUnmapHook(ptr, size, tag);
 }
 
-s8 *psxM = NULL; // Kernel & User Memory (2 Meg)
-s8 *psxP = NULL; // Parallel Port (64K)
-s8 *psxR = NULL; // BIOS ROM (512K)
-s8 *psxH = NULL; // Scratch Pad (1K) & Hardware Registers (8K)
-
-u8 **psxMemWLUT = NULL;
-u8 **psxMemRLUT = NULL;
-
 /*  Playstation Memory Map (from Playstation doc by Joshua Walker)
 0x0000_0000-0x0000_ffff		Kernel (64K)
 0x0001_0000-0x001f_ffff		User Memory (1.9 Meg)
@@ -159,44 +153,86 @@ u8 **psxMemRLUT = NULL;
 
 static int psxMemInitMap(void)
 {
-	psxM = psxMap(0x80000000, 0x00210000, 1, MAP_TAG_RAM);
-	if (psxM == MAP_FAILED)
-		psxM = psxMap(0x77000000, 0x00210000, 0, MAP_TAG_RAM);
-	if (psxM == MAP_FAILED) {
+	u8 *ptr;
+
+	ptr = psxMap(0x80000000, 0x00210000, 1, MAP_TAG_RAM);
+	if (ptr == MAP_FAILED)
+		ptr = psxMap(0x77000000, 0x00210000, 0, MAP_TAG_RAM);
+	if (ptr == MAP_FAILED) {
 		SysMessage("mapping main RAM failed");
-		psxM = NULL;
 		return -1;
 	}
-	psxP = &psxM[0x200000];
+	psxRegs.ptrs.psxM = ptr;
+	psxRegs.ptrs.psxP = ptr + 0x200000;
 
-	psxH = psxMap(0x1f800000, 0x10000, 0, MAP_TAG_OTHER);
-	if (psxH == MAP_FAILED) {
+	ptr = psxMap(0x1f800000, 0x10000, 0, MAP_TAG_OTHER);
+	if (ptr == MAP_FAILED) {
 		SysMessage("Error allocating psxH");
-		psxH = NULL;
 		return -1;
 	}
+	psxRegs.ptrs.psxH = ptr;
 
-	psxR = psxMap(0x1fc00000, 0x80000, 0, MAP_TAG_OTHER);
-	if (psxR == MAP_FAILED) {
+	ptr = psxMap(0x1fc00000, 0x80000, 0, MAP_TAG_OTHER);
+	if (ptr == MAP_FAILED) {
 		SysMessage("Error allocating psxR");
-		psxR = NULL;
 		return -1;
 	}
+	psxRegs.ptrs.psxR = ptr;
 
 	return 0;
 }
 
 static void psxMemFreeMap(void)
 {
-	if (psxM) psxUnmap(psxM, 0x00210000, MAP_TAG_RAM);
-	if (psxH) psxUnmap(psxH, 0x10000, MAP_TAG_OTHER);
-	if (psxR) psxUnmap(psxR, 0x80000, MAP_TAG_OTHER);
-	psxM = psxH = psxR = NULL;
-	psxP = NULL;
+	if (psxRegs.ptrs.psxM) psxUnmap(psxRegs.ptrs.psxM, 0x00210000, MAP_TAG_RAM);
+	if (psxRegs.ptrs.psxH) psxUnmap(psxRegs.ptrs.psxH, 0x10000, MAP_TAG_OTHER);
+	if (psxRegs.ptrs.psxR) psxUnmap(psxRegs.ptrs.psxR, 0x80000, MAP_TAG_OTHER);
+	psxRegs.ptrs.psxM = psxRegs.ptrs.psxH = psxRegs.ptrs.psxR = NULL;
+	psxRegs.ptrs.psxP = NULL;
+}
+
+static void lutMap(uintptr_t *lut, u8 *mem, u32 size, u32 start, u32 end)
+{
+	u32 i;
+	assert((size  & ((1u << PSXM_SHIFT) - 1)) == 0);
+	assert((start & ((1u << PSXM_SHIFT) - 1)) == 0);
+	assert((end   & ((1u << PSXM_SHIFT) - 1)) == 0);
+
+	for (i = start; i < end; i += (1u << PSXM_SHIFT))
+		lut[i >> PSXM_SHIFT] = (uintptr_t)mem - (i & ~(size - 1));
+}
+
+// shouldn't this affect reads, more mirrors?
+static void mapRam(int isMapped)
+{
+	//uintptr_t *rLUT = psxRegs.ptrs.memRLUT;
+	uintptr_t *wLUT = psxRegs.ptrs.memWLUT;
+
+	if (isMapped) {
+		u8 *ram = psxRegs.ptrs.psxM;
+		u32 i;
+		for (i = 0; i < 0x800000; i += 0x200000) {
+			lutMap(wLUT, ram, 0x200000, 0x00000000u + i, 0x00200000u + i);
+			lutMap(wLUT, ram, 0x200000, 0x80000000u + i, 0x80200000u + i);
+			lutMap(wLUT, ram, 0x200000, 0xa0000000u + i, 0xa0200000u + i);
+		}
+	}
+	else {
+		size_t len = (0x200000 >> PSXM_SHIFT) * sizeof(wLUT[0]);
+		//memset(rLUT + (0x00000000 >> PSXM_SHIFT), INVALID_PTR_VAL, len);
+		//memset(rLUT + (0x80000000 >> PSXM_SHIFT), INVALID_PTR_VAL, len);
+		//memset(rLUT + (0xa0000000 >> PSXM_SHIFT), INVALID_PTR_VAL, len);
+		memset(wLUT + (0x00000000 >> PSXM_SHIFT), INVALID_PTR_VAL, len);
+		memset(wLUT + (0x80000000 >> PSXM_SHIFT), INVALID_PTR_VAL, len);
+		//memset(wLUT + (0xa0000000 >> PSXM_SHIFT), INVALID_PTR_VAL, len);
+	}
 }
 
 int psxMemInit(void)
 {
+	size_t table_size = 1ul << (32 - PSXM_SHIFT);
+	uintptr_t *memRLUT;
+	uintptr_t *memWLUT;
 	unsigned int i;
 	int ret;
 
@@ -214,44 +250,38 @@ int psxMemInit(void)
 	if (DISABLE_MEM_LUTS)
 		return 0;
 
-	psxMemRLUT = (u8 **)malloc(0x10000 * sizeof(void *));
-	psxMemWLUT = (u8 **)malloc(0x10000 * sizeof(void *));
-
-	if (psxMemRLUT == NULL || psxMemWLUT == NULL) {
+	memRLUT = malloc(table_size * sizeof(memRLUT[0]) * 2);
+	if (memRLUT == NULL) {
 		SysMessage("Error allocating psxMem LUTs");
 		psxMemShutdown();
 		return -1;
 	}
 
-	memset(psxMemRLUT, (int)(uintptr_t)INVALID_PTR, 0x10000 * sizeof(void *));
-	memset(psxMemWLUT, (int)(uintptr_t)INVALID_PTR, 0x10000 * sizeof(void *));
+	assert((s8)INVALID_PTR_VAL == INVALID_PTR_VAL);
+	memset(memRLUT, INVALID_PTR_VAL, table_size * sizeof(memRLUT[0]) * 2);
+	memWLUT = memRLUT + table_size;
+	psxRegs.ptrs.memRLUT = memRLUT;
+	psxRegs.ptrs.memWLUT = memWLUT;
 
-// MemR
-	for (i = 0; i < 0x80; i++) psxMemRLUT[i + 0x0000] = (u8 *)&psxM[(i & 0x1f) << 16];
+	// ram
+	for (i = 0; i < 0x800000; i += 0x200000) {
+		u8 *ram = psxRegs.ptrs.psxM;
+		lutMap(memRLUT, ram, 0x200000, 0x00000000u + i, 0x00200000u + i);
+		lutMap(memRLUT, ram, 0x200000, 0x80000000u + i, 0x80200000u + i);
+		lutMap(memRLUT, ram, 0x200000, 0xa0000000u + i, 0xa0200000u + i);
+	}
+	mapRam(1);
 
-	memcpy(psxMemRLUT + 0x8000, psxMemRLUT, 0x80 * sizeof(void *));
-	memcpy(psxMemRLUT + 0xa000, psxMemRLUT, 0x80 * sizeof(void *));
-
-	psxMemRLUT[0x1f00] = (u8 *)psxP;
-	psxMemRLUT[0x1f80] = (u8 *)psxH;
-
-	for (i = 0; i < 0x08; i++) psxMemRLUT[i + 0x1fc0] = (u8 *)&psxR[i << 16];
-
-	memcpy(psxMemRLUT + 0x9fc0, psxMemRLUT + 0x1fc0, 0x08 * sizeof(void *));
-	memcpy(psxMemRLUT + 0xbfc0, psxMemRLUT + 0x1fc0, 0x08 * sizeof(void *));
-
-// MemW
-	for (i = 0; i < 0x80; i++) psxMemWLUT[i + 0x0000] = (u8 *)&psxM[(i & 0x1f) << 16];
-
-	memcpy(psxMemWLUT + 0x8000, psxMemWLUT, 0x80 * sizeof(void *));
-	memcpy(psxMemWLUT + 0xa000, psxMemWLUT, 0x80 * sizeof(void *));
+	// bios
+	lutMap(memRLUT, psxRegs.ptrs.psxR, 0x80000, 0x1fc00000u, 0x1fc80000u);
+	lutMap(memRLUT, psxRegs.ptrs.psxR, 0x80000, 0x9fc00000u, 0x9fc80000u);
+	lutMap(memRLUT, psxRegs.ptrs.psxR, 0x80000, 0xbfc00000u, 0xbfc80000u);
 
 	// Don't allow writes to PIO Expansion region (psxP) to take effect.
 	// NOTE: Not sure if this is needed to fix any games but seems wise,
 	//       seeing as some games do read from PIO as part of copy-protection
 	//       check. (See fix in psxMemReset() regarding psxP region reads).
-	psxMemWLUT[0x1f00] = INVALID_PTR;
-	psxMemWLUT[0x1f80] = (u8 *)psxH;
+	//memWLUT[0x1f000000 >> PSXM_SHIFT] = INVALID_PTR_VAL;
 
 	return 0;
 }
@@ -260,8 +290,11 @@ void psxMemReset() {
 	FILE *f = NULL;
 	char bios[1024];
 
-	memset(psxM, 0, 0x00200000);
-	memset(psxP, 0xff, 0x00010000);
+	memset(psxRegs.ptrs.psxM, 0, 0x00200000);
+	memset(psxRegs.ptrs.psxP, 0xff, 0x00010000);
+
+	if (!DISABLE_MEM_LUTS)
+		mapRam(1);
 
 	Config.HLE = TRUE;
 
@@ -272,7 +305,7 @@ void psxMemReset() {
 		if (f == NULL) {
 			SysMessage(_("Could not open BIOS:\"%s\". Enabling HLE Bios!\n"), bios);
 		} else {
-			if (fread(psxR, 1, 0x80000, f) == 0x80000) {
+			if (fread(psxRegs.ptrs.psxR, 1, 0x80000, f) == 0x80000) {
 				Config.HLE = FALSE;
 			} else {
 				SysMessage(_("The selected BIOS:\"%s\" is of wrong size. Enabling HLE Bios!\n"), bios);
@@ -281,7 +314,7 @@ void psxMemReset() {
 		}
 	}
 	if (Config.HLE)
-		memset(psxR, 0, 0x80000);
+		memset(psxRegs.ptrs.psxR, 0, 0x80000);
 }
 
 void psxMemShutdown() {
@@ -290,8 +323,9 @@ void psxMemShutdown() {
 	else
 		psxMemFreeMap();
 
-	free(psxMemRLUT); psxMemRLUT = NULL;
-	free(psxMemWLUT); psxMemWLUT = NULL;
+	free(psxRegs.ptrs.memRLUT);
+	psxRegs.ptrs.memRLUT = NULL;
+	psxRegs.ptrs.memWLUT = NULL;
 }
 
 int cache_isolated;
@@ -299,17 +333,7 @@ int cache_isolated;
 void psxMemOnIsolate(int enable)
 {
 	if (!DISABLE_MEM_LUTS) {
-		if (enable) {
-			memset(psxMemWLUT + 0x0000, (int)(uintptr_t)INVALID_PTR, 0x80 * sizeof(void *));
-			memset(psxMemWLUT + 0x8000, (int)(uintptr_t)INVALID_PTR, 0x80 * sizeof(void *));
-			//memset(psxMemWLUT + 0xa000, (int)(uintptr_t)INVALID_PTR, 0x80 * sizeof(void *));
-		} else {
-			int i;
-			for (i = 0; i < 0x80; i++)
-				psxMemWLUT[i + 0x0000] = (void *)&psxM[(i & 0x1f) << 16];
-			memcpy(psxMemWLUT + 0x8000, psxMemWLUT, 0x80 * sizeof(void *));
-			memcpy(psxMemWLUT + 0xa000, psxMemWLUT, 0x80 * sizeof(void *));
-		}
+		mapRam(!enable);
 	}
 
 	cache_isolated = enable;
@@ -317,184 +341,129 @@ void psxMemOnIsolate(int enable)
 			: R3000ACPU_NOTIFY_CACHE_UNISOLATED, NULL);
 }
 
-u8 psxMemRead8(u32 mem) {
-	char *p;
+u8 psxMemRead8(psxRegisters *regs, u32 mem) {
+	u8 *p;
 	u32 t;
+
+	if (likely(psxm_(&p, regs, mem, 0)))
+		return *p;
 
 	t = mem >> 16;
 	if (t == 0x1f80 || t == 0x9f80 || t == 0xbf80) {
 		if ((mem & 0xffff) < 0x400)
-			return psxHu8(mem);
+			return regs->ptrs.psxH[mem & 0x3ff];
 		else
 			return psxHwRead8(mem);
-	} else {
-		p = psxm(mem, 0);
-		if (p != INVALID_PTR) {
-			if (Config.Debug)
-				DebugCheckBP((mem & 0xffffff) | 0x80000000, R1);
-			return *(u8 *)p;
-		} else {
-#ifdef PSXMEM_LOG
-			PSXMEM_LOG("err lb %8.8lx\n", mem);
-#endif
-			return 0xFF;
-		}
 	}
+	return 0xFF;
 }
 
-u16 psxMemRead16(u32 mem) {
-	char *p;
+u16 psxMemRead16(psxRegisters *regs, u32 mem) {
+	u8 *p;
 	u32 t;
+
+	if (likely(psxm_(&p, regs, mem, 0)))
+		return SWAPu16(*(u16 *)p);
 
 	t = mem >> 16;
 	if (t == 0x1f80 || t == 0x9f80 || t == 0xbf80) {
 		if ((mem & 0xffff) < 0x400)
-			return psxHu16(mem);
+			return SWAPu16(*(u16 *)(regs->ptrs.psxH + (mem & 0x3fe)));
 		else
 			return psxHwRead16(mem);
-	} else {
-		p = psxm(mem, 0);
-		if (p != INVALID_PTR) {
-			if (Config.Debug)
-				DebugCheckBP((mem & 0xffffff) | 0x80000000, R2);
-			return SWAPu16(*(u16 *)p);
-		} else {
-#ifdef PSXMEM_LOG
-			PSXMEM_LOG("err lh %8.8lx\n", mem);
-#endif
-			return 0xFFFF;
-		}
 	}
+	return 0xFFFF;
 }
 
-u32 psxMemRead32(u32 mem) {
-	char *p;
+u32 psxMemRead32(psxRegisters *regs, u32 mem) {
+	u8 *p;
 	u32 t;
+
+	if (likely(psxm_(&p, regs, mem, 0)))
+		return SWAPu32(*(u32 *)p);
 
 	t = mem >> 16;
 	if (t == 0x1f80 || t == 0x9f80 || t == 0xbf80) {
 		if ((mem & 0xffff) < 0x400)
-			return psxHu32(mem);
+			return SWAPu32(*(u32 *)(regs->ptrs.psxH + (mem & 0x3fc)));
 		else
 			return psxHwRead32(mem);
-	} else {
-		p = psxm(mem, 0);
-		if (p != INVALID_PTR) {
-			if (Config.Debug)
-				DebugCheckBP((mem & 0xffffff) | 0x80000000, R4);
-			return SWAPu32(*(u32 *)p);
-		} else {
-			if (mem == 0xfffe0130)
-				return psxRegs.biuReg;
-#ifdef PSXMEM_LOG
-			PSXMEM_LOG("err lw %8.8lx\n", mem);
-#endif
-			return 0xFFFFFFFF;
-		}
 	}
+	if (mem == 0xfffe0130)
+		return regs->biuReg;
+	return 0xFFFFFFFF;
 }
 
-void psxMemWrite8(u32 mem, u32 value) {
-	char *p;
+void psxMemWrite8(psxRegisters *regs, u32 mem, u32 value) {
+	u8 *p;
 	u32 t;
+
+	if (likely(psxm_(&p, regs, mem, 1))) {
+		*p = value;
+#ifndef DRC_DISABLE
+		psxCpu->Clear(mem & ~3, 1);
+#endif
+		return;
+	}
 
 	t = mem >> 16;
 	if (t == 0x1f80 || t == 0x9f80 || t == 0xbf80) {
 		if ((mem & 0xffff) < 0x400)
-			psxHu8(mem) = value;
+			regs->ptrs.psxH[mem & 0x3ff] = value;
 		else
 			psxHwWrite8(mem, value);
-	} else {
-		p = psxm(mem, 1);
-		if (p != INVALID_PTR) {
-			if (Config.Debug)
-				DebugCheckBP((mem & 0xffffff) | 0x80000000, W1);
-			*(u8 *)p = value;
-#ifndef DRC_DISABLE
-			psxCpu->Clear((mem & (~3)), 1);
-#endif
-		} else {
-#ifdef PSXMEM_LOG
-			PSXMEM_LOG("err sb %8.8lx\n", mem);
-#endif
-		}
+		return;
 	}
+	log_unhandled("unhandled w8  %08x %08x @%08x\n", mem, value, regs->pc);
 }
 
-void psxMemWrite16(u32 mem, u32 value) {
-	char *p;
+void psxMemWrite16(psxRegisters *regs, u32 mem, u32 value) {
+	u8 *p;
 	u32 t;
+
+	if (likely(psxm_(&p, regs, mem, 1))) {
+		*(u16 *)p = SWAPu16(value);
+#ifndef DRC_DISABLE
+		psxCpu->Clear(mem & ~3, 1);
+#endif
+		return;
+	}
 
 	t = mem >> 16;
 	if (t == 0x1f80 || t == 0x9f80 || t == 0xbf80) {
 		if ((mem & 0xffff) < 0x400)
-			psxHu16ref(mem) = SWAPu16(value);
+			*(u16 *)(regs->ptrs.psxH + (mem & 0x3fe)) = SWAPu16(value);
 		else
 			psxHwWrite16(mem, value);
-	} else {
-		p = psxm(mem, 1);
-		if (p != INVALID_PTR) {
-			if (Config.Debug)
-				DebugCheckBP((mem & 0xffffff) | 0x80000000, W2);
-			*(u16 *)p = SWAPu16(value);
-#ifndef DRC_DISABLE
-			psxCpu->Clear((mem & (~3)), 1);
-#endif
-		} else {
-#ifdef PSXMEM_LOG
-			PSXMEM_LOG("err sh %8.8lx\n", mem);
-#endif
-		}
+		return;
 	}
+	log_unhandled("unhandled w16 %08x %08x @%08x\n", mem, value, regs->pc);
 }
 
-void psxMemWrite32(u32 mem, u32 value) {
-	char *p;
+void psxMemWrite32(psxRegisters *regs, u32 mem, u32 value) {
+	u8 *p;
 	u32 t;
 
-//	if ((mem&0x1fffff) == 0x71E18 || value == 0x48088800) SysPrintf("t2fix!!\n");
+	if (likely(psxm_(&p, regs, mem, 1))) {
+		*(u32 *)p = SWAPu32(value);
+#ifndef DRC_DISABLE
+		psxCpu->Clear(mem & ~3, 1);
+#endif
+		return;
+	}
+
 	t = mem >> 16;
 	if (t == 0x1f80 || t == 0x9f80 || t == 0xbf80) {
 		if ((mem & 0xffff) < 0x400)
-			psxHu32ref(mem) = SWAPu32(value);
+			*(u32 *)(regs->ptrs.psxH + (mem & 0x3fc)) = SWAPu32(value);
 		else
 			psxHwWrite32(mem, value);
-	} else {
-		p = psxm(mem, 1);
-		if (p != INVALID_PTR) {
-			if (Config.Debug)
-				DebugCheckBP((mem & 0xffffff) | 0x80000000, W4);
-			*(u32 *)p = SWAPu32(value);
-#ifndef DRC_DISABLE
-			psxCpu->Clear(mem, 1);
-#endif
-		} else {
-			if (mem == 0xfffe0130) {
-				psxRegs.biuReg = value;
-				return;
-			}
-#ifdef PSXMEM_LOG
-			PSXMEM_LOG("err sw %8.8lx\n", mem);
-#endif
-		}
+		return;
 	}
-}
-
-void *psxMemPointer(u32 mem) {
-	char *p;
-	u32 t;
-
-	t = mem >> 16;
-	if (t == 0x1f80 || t == 0x9f80 || t == 0xbf80) {
-		if ((mem & 0xffff) < 0x400)
-			return (void *)&psxH[mem];
-		else
-			return NULL;
-	} else {
-		p = psxm(mem, 1);
-		if (p != INVALID_PTR) {
-			return (void *)p;
-		}
-		return NULL;
+	if (mem == 0xfffe0130) {
+		regs->biuReg = value;
+		return;
 	}
+	if (!(regs->CP0.n.SR & ((1u << 16))))
+		log_unhandled("unhandled w32 %08x %08x @%08x\n", mem, value, regs->pc);
 }
