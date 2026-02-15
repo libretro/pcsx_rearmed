@@ -48,6 +48,11 @@ int AddCheat(const char *descr, char *code);
 void RemoveCheat(int index);
 int EditCheat(int index, const char *descr, char *code);
 
+#if 0
+extern s8 *prevM;
+extern u32 *SearchResults;
+extern int NumSearchResults;
+
 void FreeCheatSearchResults();
 void FreeCheatSearchMem();
 void CheatSearchBackupMemory();
@@ -79,15 +84,15 @@ void CheatSearchDifferent32();
 void CheatSearchNoChange8();
 void CheatSearchNoChange16();
 void CheatSearchNoChange32();
+#else
+#define FreeCheatSearchResults()
+#define FreeCheatSearchMem()
+#endif
 
 extern Cheat *Cheats;
 extern CheatCode *CheatCodes;
 extern int NumCheats;
 extern int NumCodes;
-
-extern s8 *prevM;
-extern u32 *SearchResults;
-extern int NumSearchResults;
 
 extern int NumCheatsAllocated;
 extern int NumCodesAllocated;

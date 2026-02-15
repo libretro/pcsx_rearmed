@@ -34,12 +34,7 @@ CheatCode *CheatCodes = NULL;
 int NumCodes = 0;
 int NumCodesAllocated = 0;
 
-s8 *prevM = NULL;
-u32 *SearchResults = NULL;
-int NumSearchResults = 0;
-static int NumSearchResultsAllocated = 0;
-
-#define ALLOC_INCREMENT		100
+#define ALLOC_INCREMENT		16
 
 void ClearAllCheats() {
 	int i;
@@ -493,6 +488,12 @@ int EditCheat(int index, const char *descr, char *code) {
 
 	return 0;
 }
+
+#if 0
+static int NumSearchResultsAllocated = 0;
+int NumSearchResults = 0;
+u32 *SearchResults = NULL;
+s8 *prevM = NULL;
 
 void FreeCheatSearchResults() {
 	if (SearchResults != NULL) {
@@ -1069,3 +1070,4 @@ void CheatSearchNoChange32() {
 
 	NumSearchResults = j;
 }
+#endif
