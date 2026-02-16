@@ -146,41 +146,6 @@ static void set_jump_target(void *addr, void *target_)
   }
 }
 
-// This optionally copies the instruction from the target of the branch into
-// the space before the branch.  Works, but the difference in speed is
-// usually insignificant.
-#if 0
-static void set_jump_target_fillslot(int addr,u_int target,int copy)
-{
-  u_char *ptr=(u_char *)addr;
-  u_int *ptr2=(u_int *)ptr;
-  assert(!copy||ptr2[-1]==0xe28dd000);
-  if(ptr[3]==0xe2) {
-    assert(!copy);
-    assert((target-(u_int)ptr2-8)<4096);
-    *ptr2=(*ptr2&0xFFFFF000)|(target-(u_int)ptr2-8);
-  }
-  else {
-    assert((ptr[3]&0x0e)==0xa);
-    u_int target_insn=*(u_int *)target;
-    if((target_insn&0x0e100000)==0) { // ALU, no immediate, no flags
-      copy=0;
-    }
-    if((target_insn&0x0c100000)==0x04100000) { // Load
-      copy=0;
-    }
-    if(target_insn&0x08000000) {
-      copy=0;
-    }
-    if(copy) {
-      ptr2[-1]=target_insn;
-      target+=4;
-    }
-    *ptr2=(*ptr2&0xFF000000)|(((target-(u_int)ptr2-8)<<6)>>8);
-  }
-}
-#endif
-
 /* Literal pool */
 static void add_literal(int addr,int val)
 {
@@ -188,17 +153,6 @@ static void add_literal(int addr,int val)
   literals[literalcount][0]=addr;
   literals[literalcount][1]=val;
   literalcount++;
-}
-
-// from a pointer to external jump stub (which was produced by emit_extjump2)
-// find where the jumping insn is
-static void *find_extjump_insn(void *stub)
-{
-  int *ptr=(int *)(stub+4);
-  assert((*ptr&0x0fff0000)==0x059f0000); // ldr rx, [pc, #ofs]
-  u_int offset=*ptr&0xfff;
-  void **l_ptr=(void *)ptr+offset+8;
-  return *l_ptr;
 }
 
 // Allocate a specific ARM register.
@@ -1584,7 +1538,7 @@ static void literal_pool_jumpover(int n)
 }
 
 // parsed by find_extjump_insn, check_extjump2
-static void emit_extjump(u_char *addr, u_int target)
+static void emit_extjump_stub(u_char *addr, u_int target)
 {
   u_char *ptr=(u_char *)addr;
   assert((ptr[3]&0x0e)==0xa);
@@ -1595,6 +1549,17 @@ static void emit_extjump(u_char *addr, u_int target)
   assert(ndrc->translation_cache <= addr &&
          addr < ndrc->translation_cache + sizeof(ndrc->translation_cache));
   emit_far_jump(dyna_linker);
+}
+
+// from a pointer to external jump stub (which was produced by emit_extjump_stub)
+// find where the jumping insn is
+static void *find_extjump_insn(void *stub)
+{
+  int *ptr=(int *)(stub+4);
+  assert((*ptr&0x0fff0000)==0x059f0000); // ldr rx, [pc, #ofs]
+  u_int offset=*ptr&0xfff;
+  void **l_ptr=(void *)ptr+offset+8;
+  return *l_ptr;
 }
 
 static void check_extjump2(void *src)
@@ -2373,7 +2338,7 @@ static void arch_init(void)
   start_tcache_write(ops, (u_char *)ops + sizeof(ndrc->tramp.ops));
   for (i = 0; i < ARRAY_SIZE(ndrc->tramp.ops); i++)
     ops[i].ldrpc = 0xe5900000 | rd_rn_rm(15,15,0) | diff; // ldr pc, [=val]
-  end_tcache_write(ops, (u_char *)ops + sizeof(ndrc->tramp.ops));
+  end_tcache_write(ops, (u_char *)ops + sizeof(ndrc->tramp.ops), 1);
 }
 
 // vim:shiftwidth=2:expandtab

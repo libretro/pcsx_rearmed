@@ -61,16 +61,6 @@ static void set_jump_target(void *addr, void *target)
     abort(); // should not happen
 }
 
-// from a pointer to external jump stub (which was produced by emit_extjump2)
-// find where the jumping insn is
-static void *find_extjump_insn(void *stub)
-{
-  int *ptr = (int *)stub + 2;
-  assert((*ptr&0x9f000000) == 0x10000000); // adr
-  int offset = (((signed int)(*ptr<<8)>>13)<<2)|((*ptr>>29)&0x3);
-  return ptr + offset / 4;
-}
-
 // Allocate a specific ARM register.
 static void alloc_arm_reg(struct regstat *cur,int i,signed char reg,int hr)
 {
@@ -1358,7 +1348,7 @@ static void literal_pool_jumpover(int n)
 }
 
 // parsed by find_extjump_insn, check_extjump2
-static void emit_extjump(u_char *addr, u_int target)
+static void emit_extjump_stub(u_char *addr, u_int target)
 {
   assert(((addr[3]&0xfc)==0x14) || ((addr[3]&0xff)==0x54)); // b or b.cond
 
@@ -1369,6 +1359,16 @@ static void emit_extjump(u_char *addr, u_int target)
   // offset shouldn't exceed +/-1MB
   emit_adr(addr, 1);
   emit_far_jump(dyna_linker);
+}
+
+// from a pointer to external jump stub (which was produced by emit_extjump_stub)
+// find where the jumping insn is
+static void *find_extjump_insn(void *stub)
+{
+  int *ptr = (int *)stub + 2;
+  assert((*ptr&0x9f000000) == 0x10000000); // adr
+  int offset = (((signed int)(*ptr<<8)>>13)<<2)|((*ptr>>29)&0x3);
+  return ptr + offset / 4;
 }
 
 static void check_extjump2(void *src)
@@ -2128,7 +2128,7 @@ static void arch_init(void)
     ops[i].ldr = 0x58000000 | imm19_rt(diff >> 2, 17); // ldr x17, [=val]
     ops[i].br  = 0xd61f0000 | rm_rn_rd(0, 17, 0);      // br x17
   }
-  end_tcache_write(ops, (u_char *)ops + sizeof(ndrc->tramp.ops));
+  end_tcache_write(ops, (u_char *)ops + sizeof(ndrc->tramp.ops), 1);
 }
 
 // vim:shiftwidth=2:expandtab

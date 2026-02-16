@@ -106,8 +106,8 @@ extern uintptr_t mini_ht[32][2];
 #endif
 
 #define RAM_SIZE 0x200000
-#define MAX_OUTPUT_BLOCK_SIZE 262144
-#define EXPIRITY_OFFSET (MAX_OUTPUT_BLOCK_SIZE * 2)
+#define MAX_OUTPUT_BLOCK_SIZE_SHIFT 18
+#define MAX_OUTPUT_BLOCK_SIZE (1 << MAX_OUTPUT_BLOCK_SIZE_SHIFT) // 262144
 #define PAGE_COUNT 1024
 
 #if defined(HAVE_CONDITIONAL_CALL) && !defined(DESTRUCTIVE_SHIFT)
@@ -219,14 +219,17 @@ struct link_entry
 
 struct block_info
 {
-  struct block_info *next;
+  struct block_info *next_by_vaddr;
+  struct block_info *next_in_tc;
   const void *source;
   const void *copy;
   u_int start; // vaddr of the block start
   u_int len;   // of the whole block source
   u_int tc_offs;
-  //u_int tc_len;
+  u_int tc_len;
   u_int reg_sv_flags;
+  u_short jump_out_cnt;
+  u_short unused;
   u_char is_dirty;
   u_char inv_near_misses;
   u_short jump_in_cnt;
@@ -287,7 +290,8 @@ static struct compile_info
   static char invalid_code[0x100000];
   static struct ht_entry hash_table[65536];
   static struct block_info *blocks[PAGE_COUNT];
-  static struct jump_info *jumps[PAGE_COUNT];
+  static struct block_info *block_oldest, *block_last_compiled;
+  static struct jump_info *jumps[PAGE_COUNT]; // [<target_page>]
   static u_int start;
   static u_int *source;
   static uint64_t gte_rs[MAXBLOCK]; // gte: 32 data and 32 ctl regs
@@ -319,7 +323,6 @@ static struct compile_info
   static int is_delayslot;
   static char shadow[1048576]  __attribute__((aligned(16)));
   static void *copy;
-  static u_int expirep;
   static u_int stop_after_jal;
   static u_int ni_count;
   static u_int err_print_count;
@@ -527,7 +530,7 @@ static void start_tcache_write(void *start, void *end)
   mprotect_w_x(start, end, 0);
 }
 
-static void end_tcache_write(void *start, void *end)
+static void end_tcache_write(void *start, void *end, int clear_cache)
 {
 #ifdef NDRC_THREAD
   if (!ndrc_g.thread.dirty_start || (size_t)ndrc_g.thread.dirty_start > (size_t)start)
@@ -535,23 +538,48 @@ static void end_tcache_write(void *start, void *end)
   if ((size_t)ndrc_g.thread.dirty_end < (size_t)end)
     ndrc_g.thread.dirty_end = end;
 #endif
-  new_dyna_clear_cache(start, end);
+  if (clear_cache)
+    new_dyna_clear_cache(start, end);
 
   mprotect_w_x(start, end, 1);
 }
 
-static void *start_block(void)
+static noinline void clear_tcache_space(uintptr_t tc_base, u_int max_space);
+
+static void *start_tcache_write_reserve(u_int max_space)
 {
-  u_char *end = out + MAX_OUTPUT_BLOCK_SIZE;
-  if (end > ndrc->translation_cache + sizeof(ndrc->translation_cache))
-    end = ndrc->translation_cache + sizeof(ndrc->translation_cache);
+  u_char *tc_base = ndrc->translation_cache;
+  u_char *end = out + max_space;
+  assert(sizeof(ndrc->translation_cache) > max_space);
+  if (end > tc_base + sizeof(ndrc->translation_cache)) {
+    clear_tcache_space(out - tc_base, end - out);
+    out = ndrc->translation_cache;
+    end = out + max_space;
+  }
+  // we do a bit more than requested to avoid large jump and lots of
+  // expirations the moment we wrap
+  assert(TARGET_SIZE_2 >= MAX_OUTPUT_BLOCK_SIZE_SHIFT);
+  max_space += (end - tc_base) >> (TARGET_SIZE_2 - MAX_OUTPUT_BLOCK_SIZE_SHIFT);
+  clear_tcache_space(out - tc_base, max_space);
+  if (out - tc_base + max_space > sizeof(ndrc->translation_cache)) {
+    u_int wrapped = out - tc_base + max_space - sizeof(ndrc->translation_cache);
+    clear_tcache_space(0, wrapped);
+  }
+  // align
+  if (((uintptr_t)out) & 7)
+    out += 8 - (((uintptr_t)out) & 7);
   start_tcache_write(NDRC_WRITE_OFFSET(out), NDRC_WRITE_OFFSET(end));
   return out;
 }
 
+static void *start_block(int max_space)
+{
+  return start_tcache_write_reserve(max_space);
+}
+
 static void end_block(void *start)
 {
-  end_tcache_write(NDRC_WRITE_OFFSET(start), NDRC_WRITE_OFFSET(out));
+  end_tcache_write(NDRC_WRITE_OFFSET(start), NDRC_WRITE_OFFSET(out), 1);
 }
 
 #ifdef NDRC_CACHE_FLUSH_ALL
@@ -569,7 +597,7 @@ static void mark_clear_cache(void *target)
 static void do_clear_cache(void)
 {
   if (needs_clear_cache) {
-    end_tcache_write(NDRC_WRITE_OFFSET(ndrc), NDRC_WRITE_OFFSET(ndrc + 1));
+    end_tcache_write(NDRC_WRITE_OFFSET(ndrc), NDRC_WRITE_OFFSET(ndrc + 1), 1);
     needs_clear_cache = 0;
   }
 }
@@ -613,7 +641,7 @@ static void do_clear_cache(void)
           break;
         end += 4096;
       }
-      end_tcache_write(NDRC_WRITE_OFFSET(start), NDRC_WRITE_OFFSET(end));
+      end_tcache_write(NDRC_WRITE_OFFSET(start), NDRC_WRITE_OFFSET(end), 1);
     }
     needs_clear_cache[i] = 0;
   }
@@ -750,12 +778,6 @@ static void mark_invalid_code(u_int vaddr, u_int len, char invalid)
     inv_code_start = inv_code_end = ~0;
 }
 
-static int doesnt_expire_soon(u_char *tcaddr)
-{
-  u_int diff = (u_int)(tcaddr - out) & ((1u << TARGET_SIZE_2) - 1u);
-  return diff > EXPIRITY_OFFSET + MAX_OUTPUT_BLOCK_SIZE;
-}
-
 static attr_unused void check_for_block_changes(u_int start, u_int end)
 {
   u_int start_page = get_page_prev(start);
@@ -763,8 +785,8 @@ static attr_unused void check_for_block_changes(u_int start, u_int end)
   u_int page;
 
   for (page = start_page; page <= end_page; page++) {
-    struct block_info *block;
-    for (block = blocks[page]; block != NULL; block = block->next) {
+    const struct block_info *block;
+    for (block = blocks[page]; block != NULL; block = block->next_by_vaddr) {
       if (block->is_dirty)
         continue;
       if (memcmp(block->source, block->copy, block->len)) {
@@ -786,7 +808,7 @@ static void *try_restore_block(u_int vaddr, u_int start_page, u_int end_page)
   stat_inc(stat_restore_tries);
   for (page = start_page; page <= end_page; page++) {
     struct block_info *block;
-    for (block = blocks[page]; block != NULL; block = block->next) {
+    for (block = blocks[page]; block != NULL; block = block->next_by_vaddr) {
       if (vaddr < block->start)
         break;
       if (!block->is_dirty || vaddr >= block->start + block->len)
@@ -845,7 +867,7 @@ static void noinline *get_addr(struct ht_entry *ht, const u_int vaddr,
   stat_inc(stat_jump_in_lookups);
   for (page = start_page; page <= end_page; page++) {
     const struct block_info *block;
-    for (block = blocks[page]; block != NULL; block = block->next) {
+    for (block = blocks[page]; block != NULL; block = block->next_by_vaddr) {
       if (vaddr < block->start)
         break;
       if (block->is_dirty || vaddr >= block->start + block->len)
@@ -1396,7 +1418,7 @@ static void *get_trampoline(const void *f)
   if (tramp->f[i] == NULL) {
     start_tcache_write(&tramp->f[i], &tramp->f[i + 1]);
     tramp->f[i] = f;
-    end_tcache_write(&tramp->f[i], &tramp->f[i + 1]);
+    end_tcache_write(&tramp->f[i], &tramp->f[i + 1], 1);
 #ifdef HAVE_LIBNX
     // invalidate the RX mirror (unsure if necessary, but just in case...)
     armDCacheFlush(&ndrc->tramp.f[i], sizeof(ndrc->tramp.f[i]));
@@ -1428,15 +1450,13 @@ static void emit_far_call(const void *f)
 }
 
 // Check if an address is already compiled
-// but don't return addresses which are about to expire from the cache
 static void *check_addr(u_int vaddr)
 {
   struct ht_entry *ht_bin = hash_table_get(vaddr);
   size_t i;
   for (i = 0; i < ARRAY_SIZE(ht_bin->vaddr); i++) {
     if (ht_bin->vaddr[i] == vaddr)
-      if (doesnt_expire_soon(ht_bin->tcaddr[i]))
-        return ht_bin->tcaddr[i];
+      return ht_bin->tcaddr[i];
   }
 
   // refactor to get_addr_nocompile?
@@ -1446,12 +1466,10 @@ static void *check_addr(u_int vaddr)
   stat_inc(stat_jump_in_lookups);
   for (page = start_page; page <= end_page; page++) {
     const struct block_info *block;
-    for (block = blocks[page]; block != NULL; block = block->next) {
+    for (block = blocks[page]; block != NULL; block = block->next_by_vaddr) {
       if (vaddr < block->start)
         break;
       if (block->is_dirty || vaddr >= block->start + block->len)
-        continue;
-      if (!doesnt_expire_soon(ndrc->translation_cache + block->tc_offs))
         continue;
       for (i = 0; i < block->jump_in_cnt; i++)
         if (block->jump_in[i].vaddr == vaddr)
@@ -1486,6 +1504,7 @@ static void *check_addr(u_int vaddr)
   return NULL;
 }
 
+// asumes blocks are to be destroyed separately
 static void blocks_clear(struct block_info **head)
 {
   struct block_info *cur, *next;
@@ -1493,34 +1512,11 @@ static void blocks_clear(struct block_info **head)
   if ((cur = *head)) {
     *head = NULL;
     while (cur) {
-      next = cur->next;
+      next = cur->next_by_vaddr;
       free(cur);
       cur = next;
     }
   }
-}
-
-static int blocks_remove_matching_addrs(struct block_info **head,
-  u_int base_offs, int shift)
-{
-  struct block_info *next;
-  int hit = 0;
-  while (*head) {
-    if ((((*head)->tc_offs ^ base_offs) >> shift) == 0) {
-      inv_debug("EXP: rm block %08x (tc_offs %x)\n", (*head)->start, (*head)->tc_offs);
-      invalidate_block(*head);
-      next = (*head)->next;
-      free(*head);
-      *head = next;
-      stat_dec(stat_blocks);
-      hit = 1;
-    }
-    else
-    {
-      head = &((*head)->next);
-    }
-  }
-  return hit;
 }
 
 // This is called when we write to a compiled block (see do_invstub)
@@ -1539,9 +1535,10 @@ static void unlink_jumps_vaddr_range(u_int start, u_int end)
         continue;
       }
 
-      inv_debug("INV: rm link to %08x (tc_offs %zx)\n", ji->e[i].target_vaddr,
-        (u_char *)ji->e[i].stub - ndrc->translation_cache);
       void *host_addr = find_extjump_insn(ji->e[i].stub);
+      inv_debug("INV: rm link to %08x (tc_offs %06zx->%06zx)\n", ji->e[i].target_vaddr,
+        (u_char *)host_addr - ndrc->translation_cache,
+        (u_char *)ji->e[i].stub - ndrc->translation_cache);
       mark_clear_cache(host_addr);
       set_jump_target(host_addr, ji->e[i].stub); // point back to dyna_linker stub
 
@@ -1553,29 +1550,6 @@ static void unlink_jumps_vaddr_range(u_int start, u_int end)
       }
       i++;
     }
-  }
-}
-
-static void unlink_jumps_tc_range(struct jump_info *ji, u_int base_offs, int shift)
-{
-  int i;
-  if (ji == NULL)
-    return;
-  for (i = 0; i < ji->count; ) {
-    u_int tc_offs = (u_char *)ji->e[i].stub - ndrc->translation_cache;
-    if (((tc_offs ^ base_offs) >> shift) != 0) {
-      i++;
-      continue;
-    }
-
-    inv_debug("EXP: rm link to %08x (tc_offs %x)\n", ji->e[i].target_vaddr, tc_offs);
-    stat_dec(stat_links);
-    ji->count--;
-    if (i < ji->count) {
-      ji->e[i] = ji->e[ji->count];
-      continue;
-    }
-    i++;
   }
 }
 
@@ -1609,7 +1583,7 @@ static int invalidate_range(u_int start, u_int end,
 
   for (page = start_page; page <= end_page; page++) {
     struct block_info *block;
-    for (block = blocks[page]; block != NULL; block = block->next) {
+    for (block = blocks[page]; block != NULL; block = block->next_by_vaddr) {
       if (block->is_dirty)
         continue;
       last_block = block;
@@ -1709,7 +1683,7 @@ void new_dynarec_invalidate_all_pages(void)
   struct block_info *block;
   u_int page;
   for (page = 0; page < ARRAY_SIZE(blocks); page++) {
-    for (block = blocks[page]; block != NULL; block = block->next) {
+    for (block = blocks[page]; block != NULL; block = block->next_by_vaddr) {
       if (block->is_dirty)
         continue;
       if (!block->source) // hack block?
@@ -1723,7 +1697,7 @@ void new_dynarec_invalidate_all_pages(void)
 }
 
 // Add an entry to jump_out after making a link
-// stub should point to stub code by emit_extjump()
+// stub should point to stub code by emit_extjump_stub()
 static void ndrc_add_jump_out(u_int vaddr, void *stub)
 {
   inv_debug("ndrc_add_jump_out: %p -> %x\n", stub, vaddr);
@@ -1735,17 +1709,25 @@ static void ndrc_add_jump_out(u_int vaddr, void *stub)
   ji = jumps[page];
   if (ji == NULL) {
     ji = malloc(sizeof(*ji) + sizeof(ji->e[0]) * 16);
+    if (!ji)
+      goto oom;
     ji->alloc = 16;
     ji->count = 0;
   }
   else if (ji->count >= ji->alloc) {
     ji->alloc += 16;
     ji = realloc(ji, sizeof(*ji) + sizeof(ji->e[0]) * ji->alloc);
+    if (!ji)
+      goto oom;
   }
   jumps[page] = ji;
   ji->e[ji->count].target_vaddr = vaddr;
   ji->e[ji->count].stub = stub;
   ji->count++;
+  return;
+oom:
+  SysPrintf("ndrc jump OOM\n");
+  abort();
 }
 
 void ndrc_patch_link(u_int vaddr, void *insn, void *stub, void *target)
@@ -1764,7 +1746,7 @@ void ndrc_patch_link(u_int vaddr, void *insn, void *stub, void *target)
   // w^x: have to do costly permission switching anyway
   new_dyna_clear_cache(NDRC_WRITE_OFFSET(insn), NDRC_WRITE_OFFSET(insn_end));
 #endif
-  //end_tcache_write(insn, insn_end);
+  //end_tcache_write(insn, insn_end, 1);
   mprotect_w_x(insn, insn_end, 1);
 }
 
@@ -6318,7 +6300,7 @@ static noinline void new_dynarec_test(void)
 
   for (i = 0; i < ARRAY_SIZE(ret); i++) {
     out = ndrc->translation_cache;
-    beginning = start_block();
+    beginning = start_block(16*4);
     ((volatile u_int *)NDRC_WRITE_OFFSET(out))[0]++; // make the cache dirty
     emit_movimm(DRC_TEST_VAL + i, 0); // test
     emit_ret();
@@ -6352,7 +6334,6 @@ void new_dynarec_clear_full(void)
   hash_table_clear();
   mini_ht_clear();
   copy=shadow;
-  expirep = EXPIRITY_OFFSET;
   literalcount=0;
   stop_after_jal=0;
   ni_count=0;
@@ -6362,6 +6343,7 @@ void new_dynarec_clear_full(void)
   f1_hack=0;
   for (n = 0; n < ARRAY_SIZE(blocks); n++)
     blocks_clear(&blocks[n]);
+  block_oldest = block_last_compiled = NULL;
   for (n = 0; n < ARRAY_SIZE(jumps); n++) {
     free(jumps[n]);
     jumps[n] = NULL;
@@ -6497,6 +6479,7 @@ void new_dynarec_cleanup(void)
 #endif
   for (n = 0; n < ARRAY_SIZE(blocks); n++)
     blocks_clear(&blocks[n]);
+  block_oldest = block_last_compiled = NULL;
   for (n = 0; n < ARRAY_SIZE(jumps); n++) {
     free(jumps[n]);
     jumps[n] = NULL;
@@ -6573,7 +6556,7 @@ int new_dynarec_save_blocks(void *save, int size)
   o = 0;
   for (p = 0; p < ARRAY_SIZE(blocks); p++) {
     bcnt = 0;
-    for (block = blocks[p]; block != NULL; block = block->next) {
+    for (block = blocks[p]; block != NULL; block = block->next_by_vaddr) {
       if (block->is_dirty)
         continue;
       tmp_blocks[bcnt].addr = block->start;
@@ -6614,7 +6597,7 @@ void new_dynarec_load_blocks(const void *save, int size)
 
   // restore clean blocks, if any
   for (page = 0, b = i = 0; page < ARRAY_SIZE(blocks); page++) {
-    for (block = blocks[page]; block != NULL; block = block->next, b++) {
+    for (block = blocks[page]; block != NULL; block = block->next_by_vaddr, b++) {
       if (!block->is_dirty)
         continue;
       assert(block->source && block->copy);
@@ -9109,68 +9092,142 @@ static noinline void pass6_clean_registers(int istart, int iend, int wr)
   }
 }
 
-static noinline void pass10_expire_blocks(void)
+static u_int *get_jump_outs(struct block_info *block)
 {
-  u_int step = MAX_OUTPUT_BLOCK_SIZE / PAGE_COUNT / 2;
-  // not sizeof(ndrc->translation_cache) due to vita hack
-  u_int step_mask = ((1u << TARGET_SIZE_2) - 1u) & ~(step - 1u);
-  u_int end = (out - ndrc->translation_cache + EXPIRITY_OFFSET) & step_mask;
-  u_int base_shift = __builtin_ctz(MAX_OUTPUT_BLOCK_SIZE);
-  int hit;
+  return (u_int *)((u_char *)block + sizeof(*block) +
+    block->jump_in_cnt * sizeof(block->jump_in[0]));
+}
 
-  for (; expirep != end; expirep = ((expirep + step) & step_mask))
-  {
-    u_int base_offs = expirep & ~(MAX_OUTPUT_BLOCK_SIZE - 1);
-    u_int block_i = expirep / step & (PAGE_COUNT - 1);
-    u_int phase = (expirep >> (base_shift - 1)) & 1u;
-    if (!(expirep & (MAX_OUTPUT_BLOCK_SIZE / 2 - 1))) {
-      inv_debug("EXP: base_offs %x/%lx phase %u\n", base_offs,
-        (long)(out - ndrc->translation_cache), phase);
-    }
+static void block_destroy(struct block_info *block)
+{
+  u_int page = get_page(block->start);
+  struct block_info **b_pptr;
+  u_int *jump_outs;
+  int i, j;
 
-    if (!phase) {
-      hit = blocks_remove_matching_addrs(&blocks[block_i], base_offs, base_shift);
-      if (hit) {
-        do_clear_cache();
-        mini_ht_clear();
+  if (block == block_last_compiled)
+    block_last_compiled = NULL;
+  invalidate_block(block);
+
+  jump_outs = get_jump_outs(block);
+  for (i = 0; i < block->jump_out_cnt; i++) {
+    u_int t_vaddr = jump_outs[i];
+    u_int t_page = get_page(t_vaddr);
+    struct jump_info *ji = jumps[t_page];
+    if (ji)
+    for (j = 0; j < ji->count; ) {
+      uintptr_t j_tc_offs;
+      if (t_vaddr != ji->e[j].target_vaddr) {
+        j++; continue;
       }
+      j_tc_offs = (u_char *)ji->e[j].stub - ndrc->translation_cache;
+      if (j_tc_offs < block->tc_offs || j_tc_offs >= block->tc_offs + block->tc_len) {
+        j++; continue;
+      }
+      // remove the entry
+      stat_dec(stat_links);
+      ji->count--;
+      if (j < ji->count)
+        ji->e[j] = ji->e[ji->count];
     }
-    else
-      unlink_jumps_tc_range(jumps[block_i], base_offs, base_shift);
+  }
+
+  // rm from the blocks list
+  for (b_pptr = &blocks[page]; *b_pptr; b_pptr = &((*b_pptr)->next_by_vaddr)) {
+    if (*b_pptr == block) {
+      *b_pptr = block->next_by_vaddr;
+      free(block);
+      block = NULL;
+      stat_dec(stat_blocks);
+      break;
+    }
+  }
+  assert(block == NULL);
+}
+
+static noinline void clear_tcache_space(uintptr_t tc_base, u_int max_space)
+{
+  struct block_info *block;
+
+  assert(tc_base < sizeof(ndrc->translation_cache));
+  for (block = block_oldest; block; )
+  {
+    u_int end_ofs = block->tc_offs + block->tc_len;
+    struct block_info *block_to_rm = block;
+
+    assert(end_ofs <= sizeof(ndrc->translation_cache));
+    if (end_ofs <= tc_base)
+      break;
+    if (tc_base + max_space <= block->tc_offs)
+      break;
+
+    block = block->next_in_tc;
+    inv_debug("EXP: tc_offs %06x tc_len %u vaddr %08x len %u\n",
+      block_to_rm->tc_offs, block_to_rm->tc_len, block_to_rm->start, block_to_rm->len);
+    unlink_jumps_vaddr_range(block_to_rm->start, block_to_rm->start + block_to_rm->len);
+    block_destroy(block_to_rm);
+  }
+  if (block_oldest != block) {
+    block_oldest = block;
+    do_clear_cache();
+    mini_ht_clear();
+    inv_debug("EXP: cleared tc_offs %06zx-%06zx\n", tc_base, tc_base + max_space);
   }
 }
 
-static struct block_info *new_block_info(u_int start, u_int len,
-  const void *source, const void *copy, u_char *beginning, u_short jump_in_count)
+static struct block_info *block_info_new(u_int start, u_int len,
+  const void *source, const void *copy, u_short jump_in_count, u_int jump_out_count)
 {
-  struct block_info **b_pptr;
   struct block_info *block;
-  u_int page = get_page(start);
 
-  block = malloc(sizeof(*block) + jump_in_count * sizeof(block->jump_in[0]));
-  assert(block);
+  block = calloc(sizeof(*block) + jump_in_count * sizeof(block->jump_in[0]) +
+                 jump_out_count * sizeof(u_int), 1);
+  if (!block) {
+    SysPrintf("ndrc block OOM\n");
+    abort();
+  }
   assert(jump_in_count > 0);
+  assert(jump_out_count < 0x10000u);
   block->source = source;
   block->copy = copy;
   block->start = start;
   block->len = len;
-  block->reg_sv_flags = 0;
-  block->tc_offs = beginning - ndrc->translation_cache;
-  //block->tc_len = out - beginning;
-  block->is_dirty = 0;
-  block->inv_near_misses = 0;
+  block->jump_out_cnt = jump_out_count;
   block->jump_in_cnt = jump_in_count;
 
+  return block;
+}
+
+static void block_info_finish(struct block_info *block, u_char *beginning)
+{
+  u_int page = get_page(block->start);
+  struct block_info **b_pptr;
+  u_int *jump_outs;
+  int i, j;
+
+  block->tc_offs = beginning - ndrc->translation_cache;
+  block->tc_len = out - beginning;
+
+  jump_outs = get_jump_outs(block);
+  for (i = j = 0; i < linkcount; i++)
+    if (!link_addr[i].internal)
+      jump_outs[j++] = link_addr[i].target;
+  assert(j == block->jump_out_cnt);
+
   // insert sorted by start mirror-unmasked vaddr
-  for (b_pptr = &blocks[page]; ; b_pptr = &((*b_pptr)->next)) {
-    if (*b_pptr == NULL || (*b_pptr)->start >= start) {
-      block->next = *b_pptr;
+  for (b_pptr = &blocks[page]; ; b_pptr = &((*b_pptr)->next_by_vaddr)) {
+    if (*b_pptr == NULL || (*b_pptr)->start >= block->start) {
+      block->next_by_vaddr = *b_pptr;
       *b_pptr = block;
       break;
     }
   }
+  if (block_oldest == NULL)
+    block_oldest = block;
+  if (block_last_compiled)
+    block_last_compiled->next_in_tc = block;
+  block_last_compiled = block;
   stat_inc(stat_blocks);
-  return block;
 }
 
 static int noinline new_recompile_block(u_int addr)
@@ -9199,20 +9256,21 @@ static int noinline new_recompile_block(u_int addr)
   ndrc_g.did_compile++;
   if (Config.HLE && start == 0x80001000) // hlecall
   {
-    void *beginning = start_block();
+    void *beginning = start_block(16*4);
 
     emit_movimm(start,0);
     emit_writeword(0,&psxRegs.pc);
     emit_far_jump(new_dyna_leave);
     literal_pool(0);
     end_block(beginning);
-    struct block_info *block = new_block_info(start, 4, NULL, NULL, beginning, 1);
+    struct block_info *block = block_info_new(start, 4, NULL, NULL, 1, 0);
     block->jump_in[0].vaddr = start;
     block->jump_in[0].addr = beginning;
+    block_info_finish(block, beginning);
     return 0;
   }
   else if (f1_hack && hack_addr == 0) {
-    void *beginning = start_block();
+    void *beginning = start_block(64*4);
     emit_movimm(start, 0);
     emit_writeword(0, &hack_addr);
     emit_readword(&psxRegs.GPR.n.sp, 0);
@@ -9229,9 +9287,10 @@ static int noinline new_recompile_block(u_int addr)
     literal_pool(0);
     end_block(beginning);
 
-    struct block_info *block = new_block_info(start, 4, NULL, NULL, beginning, 1);
+    struct block_info *block = block_info_new(start, 4, NULL, NULL, 1, 0);
     block->jump_in[0].vaddr = start;
     block->jump_in[0].addr = beginning;
+    block_info_finish(block, beginning);
     SysPrintf("F1 hack to   %08x\n", start);
     return 0;
   }
@@ -9258,7 +9317,6 @@ static int noinline new_recompile_block(u_int addr)
   /* Pass 7: flag 32-bit registers */
   /* Pass 8: assembly */
   /* Pass 9: linker */
-  /* Pass 10: garbage collection / free memory */
 
   /* Pass 1 disassembly */
 
@@ -9306,7 +9364,7 @@ static int noinline new_recompile_block(u_int addr)
   linkcount=0;stubcount=0;
   is_delayslot=0;
   u_int dirty_pre=0;
-  void *beginning=start_block();
+  void *beginning = start_block(MAX_OUTPUT_BLOCK_SIZE);
   void *instr_addr0_override = NULL;
   int ds = 0;
 
@@ -9502,7 +9560,8 @@ static int noinline new_recompile_block(u_int addr)
 #endif
 
   /* Pass 9 - Linker */
-  for(i=0;i<linkcount;i++)
+  u_int jump_out_count = 0;
+  for (i = 0; i < linkcount; i++)
   {
     assem_debug("link: %p -> %08x\n",
       log_addr(link_addr[i].addr), link_addr[i].target);
@@ -9511,10 +9570,11 @@ static int noinline new_recompile_block(u_int addr)
     {
       void *stub = out;
       void *addr = check_addr(link_addr[i].target);
-      emit_extjump(link_addr[i].addr, link_addr[i].target);
+      emit_extjump_stub(link_addr[i].addr, link_addr[i].target);
+      jump_out_count++;
       if (addr) {
         set_jump_target(link_addr[i].addr, addr);
-        ndrc_add_jump_out(link_addr[i].target,stub);
+        ndrc_add_jump_out(link_addr[i].target, stub);
       }
       else
         set_jump_target(link_addr[i].addr, stub);
@@ -9525,11 +9585,7 @@ static int noinline new_recompile_block(u_int addr)
       int target=(link_addr[i].target-start)>>2;
       assert(target>=0&&target<slen);
       assert(instr_addr[target]);
-      //#ifdef CORTEX_A8_BRANCH_PREDICTION_HACK
-      //set_jump_target_fillslot(link_addr[i].addr,instr_addr[target],link_addr[i].ext>>1);
-      //#else
       set_jump_target(link_addr[i].addr, instr_addr[target]);
-      //#endif
     }
   }
 
@@ -9552,7 +9608,7 @@ static int noinline new_recompile_block(u_int addr)
   }
 
   struct block_info *block =
-    new_block_info(start, slen * 4, source, copy, beginning, jump_in_count);
+    block_info_new(start, slen * 4, source, copy, jump_in_count, jump_out_count);
   block->reg_sv_flags = state_rflags;
 
   int jump_in_i = 0;
@@ -9580,28 +9636,16 @@ static int noinline new_recompile_block(u_int addr)
   hash_table_add(block->jump_in[0].vaddr, block->jump_in[0].addr);
   // Write out the literal pool if necessary
   literal_pool(0);
-  #ifdef CORTEX_A8_BRANCH_PREDICTION_HACK
-  // Align code
-  if(((u_int)out)&7) emit_addnop(13);
-  #endif
   assert(out - (u_char *)beginning < MAX_OUTPUT_BLOCK_SIZE);
   //printf("shadow buffer: %p-%p\n",copy,(u_char *)copy+slen*4);
   memcpy(copy, source, source_len);
   copy += source_len;
 
   end_block(beginning);
-
-  // If we're within 256K of the end of the buffer,
-  // start over from the beginning. (Is 256K enough?)
-  if (out > ndrc->translation_cache + sizeof(ndrc->translation_cache) - MAX_OUTPUT_BLOCK_SIZE)
-    out = ndrc->translation_cache;
+  block_info_finish(block, beginning);
 
   // Trap writes to any of the pages we compiled
   mark_invalid_code(start, slen*4, 0);
-
-  /* Pass 10 - Free memory by expiring oldest blocks */
-
-  pass10_expire_blocks();
 
 #ifdef ASSEM_PRINT
   fflush(stdout);
