@@ -1449,9 +1449,9 @@ static void loadstore_extend(enum stub_type type, u_int rs, u_int rt)
 #include "pcsxmem.h"
 //#include "pcsxmem_inline.c"
 
-static void do_readstub(int n)
+static void do_readstub(struct compile_state *st, int n)
 {
-  assem_debug("do_readstub %x\n",start+stubs[n].a*4);
+  assem_debug("do_readstub %x\n", st->start + stubs[n].a*4);
   set_jump_target(stubs[n].addr, out);
   enum stub_type type = stubs[n].type;
   int i = stubs[n].a;
@@ -1625,9 +1625,9 @@ static void inline_readstub(enum stub_type type, int i, u_int addr,
   restore_regs(reglist);
 }
 
-static void do_writestub(int n)
+static void do_writestub(struct compile_state *st, int n)
 {
-  assem_debug("do_writestub %x\n",start+stubs[n].a*4);
+  assem_debug("do_writestub %x\n", st->start + stubs[n].a*4);
   set_jump_target(stubs[n].addr, out);
   enum stub_type type=stubs[n].type;
   int i=stubs[n].a;
@@ -1761,10 +1761,11 @@ static void inline_writestub(enum stub_type type, int i, u_int addr,
 
 /* Special assem */
 
-static void c2op_prologue(u_int op, int i, const struct regstat *i_regs, u_int reglist)
+static void c2op_prologue(struct compile_state *st, u_int op, int i,
+  const struct regstat *i_regs, u_int reglist)
 {
   save_load_regs_all(1, reglist);
-  cop2_do_stall_check(op, i, i_regs, 0);
+  cop2_do_stall_check(st, op, i, i_regs, 0);
 #ifdef PCNT
   emit_movimm(op, 0);
   emit_far_call(pcnt_gte_start);
@@ -1782,9 +1783,9 @@ static void c2op_epilogue(u_int op,u_int reglist)
   save_load_regs_all(0, reglist);
 }
 
-static void c2op_assemble(int i, const struct regstat *i_regs)
+static void c2op_assemble(struct compile_state *st, int i, const struct regstat *i_regs)
 {
-  u_int c2op=source[i]&0x3f;
+  u_int c2op = st->source[i]&0x3f;
   u_int hr,reglist_full=0,reglist;
   int need_flags,need_ir;
   for(hr=0;hr<HOST_REGS;hr++) {
@@ -1796,7 +1797,7 @@ static void c2op_assemble(int i, const struct regstat *i_regs)
     need_flags=!(gte_unneeded[i+1]>>63); // +1 because of how liveness detection works
     need_ir=(gte_unneeded[i+1]&0xe00)!=0xe00;
     assem_debug("gte op %08x, unneeded %016lx, need_flags %d, need_ir %d\n",
-      source[i],gte_unneeded[i+1],need_flags,need_ir);
+      st->source[i], gte_unneeded[i+1], need_flags, need_ir);
     if(HACK_ENABLED(NDHACK_GTE_NO_FLAGS))
       need_flags=0;
     //int shift = (source[i] >> 19) & 1;
@@ -1804,8 +1805,8 @@ static void c2op_assemble(int i, const struct regstat *i_regs)
     switch(c2op) {
       default:
         (void)need_ir;
-        c2op_prologue(c2op, i, i_regs, reglist);
-        emit_movimm(source[i],1); // opcode
+        c2op_prologue(st, c2op, i, i_regs, reglist);
+        emit_movimm(st->source[i], 1); // opcode
         emit_writeword(1,&psxRegs.code);
         emit_far_call(need_flags?gte_handlers[c2op]:gte_handlers_nf[c2op]);
         break;
@@ -2066,10 +2067,12 @@ static void do_miniht_jump(u_int rs, u_int rh, u_int ht) {
 }
 
 // parsed by set_jump_target?
-static void do_miniht_insert(u_int return_address,u_int rt,int temp) {
+static void do_miniht_insert(struct compile_state *st, u_int return_address,
+  u_int rt, int temp)
+{
   emit_movz_lsl16((return_address>>16)&0xffff,rt);
   emit_movk(return_address&0xffff,rt);
-  add_to_linker(out,return_address,1);
+  add_to_linker(st, out, return_address, 1);
   emit_adr(out,temp);
   emit_writedword(temp,&mini_ht[(return_address&0xFF)>>3][1]);
   emit_writeword(rt,&mini_ht[(return_address&0xFF)>>3][0]);
