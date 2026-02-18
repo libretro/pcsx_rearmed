@@ -114,6 +114,12 @@ extern uintptr_t mini_ht[32][2];
 #define INVALIDATE_USE_COND_CALL
 #endif
 
+#ifdef NO_WRITE_EXEC
+#define BLOCK_INFO_IN_TC 0
+#else
+#define BLOCK_INFO_IN_TC 1
+#endif
+
 #ifdef VITA
 // apparently Vita has a 16MB limit, so either we cut tc in half,
 // or use this hack (it's a hack because tc size was designed to be power-of-2)
@@ -321,8 +327,6 @@ static struct compile_info
   static u_int literals[1024][2];
   static int literalcount;
   static int is_delayslot;
-  static char shadow[1048576]  __attribute__((aligned(16)));
-  static void *copy;
   static u_int stop_after_jal;
   static u_int ni_count;
   static u_int err_print_count;
@@ -1513,7 +1517,9 @@ static void blocks_clear(struct block_info **head)
     *head = NULL;
     while (cur) {
       next = cur->next_by_vaddr;
+#if !BLOCK_INFO_IN_TC
       free(cur);
+#endif
       cur = next;
     }
   }
@@ -6330,10 +6336,8 @@ void new_dynarec_clear_full(void)
   int n;
   out = ndrc->translation_cache;
   memset(invalid_code,1,sizeof(invalid_code));
-  memset(shadow,0,sizeof(shadow));
   hash_table_clear();
   mini_ht_clear();
-  copy=shadow;
   literalcount=0;
   stop_after_jal=0;
   ni_count=0;
@@ -6637,11 +6641,18 @@ void new_dynarec_load_blocks(const void *save, int size)
 void new_dynarec_print_stats(void)
 {
 #ifdef STAT_PRINT
-  printf("cc %3d,%3d,%3d lu%6d,%3d,%3d c%3d inv%3d,%3d tc_offs %zu b %u,%u\n",
+  size_t i, lmem = 0;
+  for (i = 0; i < ARRAY_SIZE(jumps); i++) {
+    struct jump_info *ji = jumps[i];
+    if (ji)
+      lmem += sizeof(*ji) + ji->alloc * sizeof(ji->e[0]) + sizeof(size_t) * 2;
+  }
+
+  printf("cc %3d,%3d,%3d lu%6d,%3d,%3d c%3d inv%3d,%3d tc_offs %06zx b %u l %u/%zd\n",
     stat_bc_pre, stat_bc_direct, stat_bc_restore,
     stat_ht_lookups, stat_jump_in_lookups, stat_restore_tries,
     stat_restore_compares, stat_inv_addr_calls, stat_inv_hits,
-    out - ndrc->translation_cache, stat_blocks, stat_links);
+    out - ndrc->translation_cache, stat_blocks, stat_links, lmem);
   stat_bc_direct = stat_bc_pre = stat_bc_restore =
   stat_ht_lookups = stat_jump_in_lookups = stat_restore_tries =
   stat_restore_compares = stat_inv_addr_calls = stat_inv_hits = 0;
@@ -9136,7 +9147,9 @@ static void block_destroy(struct block_info *block)
   for (b_pptr = &blocks[page]; *b_pptr; b_pptr = &((*b_pptr)->next_by_vaddr)) {
     if (*b_pptr == block) {
       *b_pptr = block->next_by_vaddr;
+#if !BLOCK_INFO_IN_TC
       free(block);
+#endif
       block = NULL;
       stat_dec(stat_blocks);
       break;
@@ -9175,13 +9188,19 @@ static noinline void clear_tcache_space(uintptr_t tc_base, u_int max_space)
   }
 }
 
+static size_t block_info_get_size(u_int jump_in_count, u_int jump_out_count)
+{
+  struct block_info *block;
+  return sizeof(*block) + jump_in_count * sizeof(block->jump_in[0]) +
+    jump_out_count * sizeof(u_int);
+}
+
 static struct block_info *block_info_new(u_int start, u_int len,
-  const void *source, const void *copy, u_short jump_in_count, u_int jump_out_count)
+  const void *source, u_short jump_in_count, u_int jump_out_count)
 {
   struct block_info *block;
 
-  block = calloc(sizeof(*block) + jump_in_count * sizeof(block->jump_in[0]) +
-                 jump_out_count * sizeof(u_int), 1);
+  block = calloc(block_info_get_size(jump_in_count, jump_out_count), 1);
   if (!block) {
     SysPrintf("ndrc block OOM\n");
     abort();
@@ -9189,7 +9208,6 @@ static struct block_info *block_info_new(u_int start, u_int len,
   assert(jump_in_count > 0);
   assert(jump_out_count < 0x10000u);
   block->source = source;
-  block->copy = copy;
   block->start = start;
   block->len = len;
   block->jump_out_cnt = jump_out_count;
@@ -9198,15 +9216,39 @@ static struct block_info *block_info_new(u_int start, u_int len,
   return block;
 }
 
-static void block_info_finish(struct block_info *block, u_char *beginning)
+static void block_info_finish(struct block_info *block_tmp, u_char *beginning,
+  u_char *end)
 {
-  u_int page = get_page(block->start);
+  u_int page = get_page(block_tmp->start);
+  struct block_info *block;
   struct block_info **b_pptr;
+  void *copy = NULL;
   u_int *jump_outs;
   int i, j;
 
+  if (block_tmp->source && block_tmp->len > 0) {
+    // put a copy of source in tc
+    copy = start_tcache_write_reserve(block_tmp->len);
+    memcpy(copy, block_tmp->source, block_tmp->len);
+    out += block_tmp->len;
+    end_tcache_write(NDRC_WRITE_OFFSET(copy), NDRC_WRITE_OFFSET(out), 0);
+  }
+#if BLOCK_INFO_IN_TC
+  // put the descriptor itself in tc to reduce heap growth
+  size_t bi_size = block_info_get_size(block_tmp->jump_in_cnt, block_tmp->jump_out_cnt);
+  block = start_tcache_write_reserve(bi_size);
+  memcpy(block, block_tmp, sizeof(*block) +
+         block_tmp->jump_in_cnt * sizeof(block_tmp->jump_in[0]));
+  out += bi_size;
+  end_tcache_write(NDRC_WRITE_OFFSET(block), NDRC_WRITE_OFFSET(out), 0);
+  free(block_tmp);
+#else
+  block = block_tmp;
+#endif
+
+  block->copy = copy;
   block->tc_offs = beginning - ndrc->translation_cache;
-  block->tc_len = out - beginning;
+  block->tc_len = end - beginning;
 
   jump_outs = get_jump_outs(block);
   for (i = j = 0; i < linkcount; i++)
@@ -9263,10 +9305,10 @@ static int noinline new_recompile_block(u_int addr)
     emit_far_jump(new_dyna_leave);
     literal_pool(0);
     end_block(beginning);
-    struct block_info *block = block_info_new(start, 4, NULL, NULL, 1, 0);
+    struct block_info *block = block_info_new(start, 4, NULL, 1, 0);
     block->jump_in[0].vaddr = start;
     block->jump_in[0].addr = beginning;
-    block_info_finish(block, beginning);
+    block_info_finish(block, beginning, out);
     return 0;
   }
   else if (f1_hack && hack_addr == 0) {
@@ -9287,10 +9329,10 @@ static int noinline new_recompile_block(u_int addr)
     literal_pool(0);
     end_block(beginning);
 
-    struct block_info *block = block_info_new(start, 4, NULL, NULL, 1, 0);
+    struct block_info *block = block_info_new(start, 4, NULL, 1, 0);
     block->jump_in[0].vaddr = start;
     block->jump_in[0].addr = beginning;
-    block_info_finish(block, beginning);
+    block_info_finish(block, beginning, out);
     SysPrintf("F1 hack to   %08x\n", start);
     return 0;
   }
@@ -9590,13 +9632,10 @@ static int noinline new_recompile_block(u_int addr)
   }
 
   u_int source_len = slen*4;
-  if (dops[slen-1].itype == INTCALL && source_len > 4)
+  if (dops[slen-1].itype == INTCALL && !dops[slen-1].bt && source_len > 4)
     // no need to treat the last instruction as compiled
-    // as interpreter fully handles it
+    // as the interpreter fully handles it
     source_len -= 4;
-
-  if ((u_char *)copy + source_len > (u_char *)shadow + sizeof(shadow))
-    copy = shadow;
 
   // External Branch Targets (jump_in)
   int jump_in_count = 1;
@@ -9608,7 +9647,7 @@ static int noinline new_recompile_block(u_int addr)
   }
 
   struct block_info *block =
-    block_info_new(start, slen * 4, source, copy, jump_in_count, jump_out_count);
+    block_info_new(start, source_len, source, jump_in_count, jump_out_count);
   block->reg_sv_flags = state_rflags;
 
   int jump_in_i = 0;
@@ -9637,15 +9676,14 @@ static int noinline new_recompile_block(u_int addr)
   // Write out the literal pool if necessary
   literal_pool(0);
   assert(out - (u_char *)beginning < MAX_OUTPUT_BLOCK_SIZE);
-  //printf("shadow buffer: %p-%p\n",copy,(u_char *)copy+slen*4);
-  memcpy(copy, source, source_len);
-  copy += source_len;
 
   end_block(beginning);
-  block_info_finish(block, beginning);
+  block_info_finish(block, beginning, out);
+  block = NULL;
 
   // Trap writes to any of the pages we compiled
-  mark_invalid_code(start, slen*4, 0);
+  if (source_len)
+    mark_invalid_code(start, source_len, 0);
 
 #ifdef ASSEM_PRINT
   fflush(stdout);
