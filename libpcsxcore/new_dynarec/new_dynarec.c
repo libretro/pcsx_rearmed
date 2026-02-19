@@ -306,8 +306,6 @@ static struct compile_info
   static u_int smrv_weak; // same, but somewhat less likely
   static u_int smrv_strong_next; // same, but after current insn executes
   static u_int smrv_weak_next;
-  static uint64_t unneeded_reg[MAXBLOCK];
-  static uint64_t branch_unneeded_reg[MAXBLOCK];
   // see 'struct regstat' for a description
   static signed char regmap_pre[MAXBLOCK][HOST_REGS];
   // contains 'real' consts at [i] insn, but may differ from what's actually
@@ -316,7 +314,7 @@ static struct compile_info
   static uint32_t constmap[MAXBLOCK][HOST_REGS];
   static struct regstat regs[MAXBLOCK];
   static struct regstat branch_regs[MAXBLOCK];
-  static struct code_stub stubs[MAXBLOCK*3];
+  static struct code_stub stubs[MAXBLOCK];
   static int stubcount;
   static u_int literals[1024][2];
   static int literalcount;
@@ -355,6 +353,8 @@ struct compile_state
   int linkcount;
   void *instr_addr[MAXBLOCK];
   struct link_entry link_addr[MAXBLOCK];
+  uint64_t unneeded_reg[MAXBLOCK];
+  uint64_t branch_unneeded_reg[MAXBLOCK];
 };
 
   #define HACK_ENABLED(x) ((ndrc_g.hacks | ndrc_g.hacks_pergame) & (x))
@@ -1212,7 +1212,7 @@ static int needed_again(struct compile_state *st, int r, int i)
   {
     if(dops[i+j].rs1==r) rn=j;
     if(dops[i+j].rs2==r) rn=j;
-    if((unneeded_reg[i+j]>>r)&1) rn=10;
+    if((st->unneeded_reg[i+j]>>r)&1) rn=10;
     if(i+j>=0&&(dops[i+j].itype==UJUMP||dops[i+j].itype==CJUMP||dops[i+j].itype==SJUMP))
     {
       b=j;
@@ -1249,7 +1249,7 @@ static int loop_reg(struct compile_state *st, int i, int r, int hr)
   for(;k<j;k++)
   {
     assert(r < 64);
-    if((unneeded_reg[i+k]>>r)&1) return hr;
+    if((st->unneeded_reg[i+k]>>r)&1) return hr;
     if(i+k>=0&&(dops[i+k].itype==UJUMP||dops[i+k].itype==CJUMP||dops[i+k].itype==SJUMP))
     {
       if(cinfo[i+k].ba >= st->start && cinfo[i+k].ba < (st->start+i*4))
@@ -1960,7 +1960,7 @@ static void alloc_reg_temp(struct compile_state *st, struct regstat *cur,
     if(r>=0) {
       assert(r < 64);
       if((cur->u>>r)&1) {
-        if(i==0||((unneeded_reg[i-1]>>r)&1)) {
+        if(i==0||((st->unneeded_reg[i-1]>>r)&1)) {
           alloc_set(cur, reg, hr);
           return;
         }
@@ -4726,7 +4726,7 @@ static int get_final_value(struct compile_state *st, int hr, int i, u_int *value
   //printf("c=%lx\n",(long)constmap[i][hr]);
   if(i==st->slen-1) return 1;
   assert(reg < 64);
-  return !((unneeded_reg[i+1]>>reg)&1);
+  return !((st->unneeded_reg[i+1]>>reg)&1);
 }
 
 // Load registers with known constants
@@ -4909,7 +4909,7 @@ static void store_regs_bt(struct compile_state *st, signed char i_regmap[],
           if(i_regmap[hr]!=regs[t].regmap_entry[hr] || !((regs[t].dirty>>hr)&1)) {
             if((i_dirty>>hr)&1) {
               assert(i_regmap[hr]<64);
-              if(!((unneeded_reg[t]>>i_regmap[hr])&1))
+              if(!((st->unneeded_reg[t]>>i_regmap[hr])&1))
                 emit_storereg(i_regmap[hr],hr);
             }
           }
@@ -4980,7 +4980,7 @@ static int match_bt(struct compile_state *st, signed char i_regmap[],
           {
             if(i_regmap[hr]<TEMPREG)
             {
-              if(!((unneeded_reg[t]>>i_regmap[hr])&1))
+              if(!((st->unneeded_reg[t]>>i_regmap[hr])&1))
                 return 0;
             }
             else if(i_regmap[hr]>=64&&i_regmap[hr]<TEMPREG+64)
@@ -4996,7 +4996,7 @@ static int match_bt(struct compile_state *st, signed char i_regmap[],
           {
             if((i_dirty>>hr)&1)
             {
-              if(!((unneeded_reg[t]>>i_regmap[hr])&1))
+              if(!((st->unneeded_reg[t]>>i_regmap[hr])&1))
               {
                 //printf("%x: dirty no match\n",addr);
                 return 0;
@@ -6303,7 +6303,7 @@ void disassemble_inst(int i, u_int start, u_int *source)
     return;
     #endif
     printf("D: %x  WD: %x  U: %"PRIx64"  hC: %x  hWC: %x  hLC: %x\n",
-      regs[i].dirty, regs[i].wasdirty, unneeded_reg[i],
+      regs[i].dirty, regs[i].wasdirty, st->unneeded_reg[i],
       regs[i].isconst, regs[i].wasconst, regs[i].loadedconst);
     print_regmap("pre:   ", regmap_pre[i]);
     print_regmap("entry: ", regs[i].regmap_entry);
@@ -7339,7 +7339,7 @@ static noinline void pass2b_unneeded_regs(struct compile_state *st,
     u=1;
     gte_u=gte_u_unknown;
   }else{
-    //u=unneeded_reg[iend+1];
+    //u=st->unneeded_reg[iend+1];
     u=1;
     gte_u=gte_unneeded[iend+1];
   }
@@ -7354,7 +7354,7 @@ static noinline void pass2b_unneeded_regs(struct compile_state *st,
         // Branch out of this block, flush all regs
         u=1;
         gte_u=gte_u_unknown;
-        branch_unneeded_reg[i]=u;
+        st->branch_unneeded_reg[i]=u;
         // Merge in delay slot
         u|=(1LL<<dops[i+1].rt1)|(1LL<<dops[i+1].rt2);
         u&=~((1LL<<dops[i+1].rs1)|(1LL<<dops[i+1].rs2));
@@ -7373,7 +7373,7 @@ static noinline void pass2b_unneeded_regs(struct compile_state *st,
             temp_gte_u=0;
           } else {
             // Conditional branch (not taken case)
-            temp_u=unneeded_reg[i+2];
+            temp_u=st->unneeded_reg[i+2];
             temp_gte_u&=gte_unneeded[i+2];
           }
           // Merge in delay slot
@@ -7387,23 +7387,23 @@ static noinline void pass2b_unneeded_regs(struct compile_state *st,
           temp_u|=1;
           temp_gte_u|=gte_rt[i];
           temp_gte_u&=~gte_rs[i];
-          unneeded_reg[i]=temp_u;
+          st->unneeded_reg[i]=temp_u;
           gte_unneeded[i]=temp_gte_u;
           // Only go three levels deep.  This recursion can take an
           // excessive amount of time if there are a lot of nested loops.
           if(r<2) {
             pass2b_unneeded_regs(st, (cinfo[i].ba - st->start)>>2, i-1, r+1);
           }else{
-            unneeded_reg[(cinfo[i].ba - st->start)>>2]=1;
+            st->unneeded_reg[(cinfo[i].ba - st->start)>>2]=1;
             gte_unneeded[(cinfo[i].ba - st->start)>>2]=gte_u_unknown;
           }
         } /*else*/ if(1) {
           if (dops[i].is_ujump)
           {
             // Unconditional branch
-            u=unneeded_reg[(cinfo[i].ba - st->start)>>2];
+            u=st->unneeded_reg[(cinfo[i].ba - st->start)>>2];
             gte_u=gte_unneeded[(cinfo[i].ba - st->start)>>2];
-            branch_unneeded_reg[i]=u;
+            st->branch_unneeded_reg[i]=u;
             // Merge in delay slot
             u|=(1LL<<dops[i+1].rt1)|(1LL<<dops[i+1].rt2);
             u&=~((1LL<<dops[i+1].rs1)|(1LL<<dops[i+1].rs2));
@@ -7412,9 +7412,9 @@ static noinline void pass2b_unneeded_regs(struct compile_state *st,
             gte_u&=~gte_rs[i+1];
           } else {
             // Conditional branch
-            b=unneeded_reg[(cinfo[i].ba - st->start)>>2];
+            b=st->unneeded_reg[(cinfo[i].ba - st->start)>>2];
             gte_b=gte_unneeded[(cinfo[i].ba - st->start)>>2];
-            branch_unneeded_reg[i]=b;
+            st->branch_unneeded_reg[i]=b;
             // Branch delay slot
             b|=(1LL<<dops[i+1].rt1)|(1LL<<dops[i+1].rt2);
             b&=~((1LL<<dops[i+1].rs1)|(1LL<<dops[i+1].rs2));
@@ -7424,9 +7424,9 @@ static noinline void pass2b_unneeded_regs(struct compile_state *st,
             u&=b;
             gte_u&=gte_b;
             if(i<st->slen-1) {
-              branch_unneeded_reg[i]&=unneeded_reg[i+2];
+              st->branch_unneeded_reg[i]&=st->unneeded_reg[i+2];
             } else {
-              branch_unneeded_reg[i]=1;
+              st->branch_unneeded_reg[i]=1;
             }
           }
         }
@@ -7441,7 +7441,7 @@ static noinline void pass2b_unneeded_regs(struct compile_state *st,
     u&=~(1LL<<dops[i].rs1);
     u&=~(1LL<<dops[i].rs2);
     gte_u&=~gte_rs[i];
-    if(gte_rs[i]&&dops[i].rt1&&(unneeded_reg[i+1]&(1ll<<dops[i].rt1)))
+    if(gte_rs[i]&&dops[i].rt1&&(st->unneeded_reg[i+1]&(1ll<<dops[i].rt1)))
       gte_u|=gte_rs[i]&gte_unneeded[i+1]; // MFC2/CFC2 to dead register, unneeded
     if (dops[i].may_except || dops[i].itype == RFE)
     {
@@ -7452,14 +7452,14 @@ static noinline void pass2b_unneeded_regs(struct compile_state *st,
     // R0 is always unneeded
     u|=1;
     // Save it
-    unneeded_reg[i]=u;
+    st->unneeded_reg[i]=u;
     gte_unneeded[i]=gte_u;
     /*
     printf("ur (%d,%d) %x: ",istart,iend,st->start+i*4);
     printf("U:");
     int r;
     for(r=1;r<=CCREG;r++) {
-      if((unneeded_reg[i]>>r)&1) {
+      if((st->unneeded_reg[i]>>r)&1) {
         if(r==HIREG) printf(" HI");
         else if(r==LOREG) printf(" LO");
         else printf(" r%d",r);
@@ -7512,7 +7512,7 @@ static noinline void pass3_register_alloc(struct compile_state *st, u_int addr)
   clear_all_regs(current.regmap_entry);
   clear_all_regs(current.regmap);
   current.wasdirty = current.dirty = 0;
-  current.u = unneeded_reg[0];
+  current.u = st->unneeded_reg[0];
   alloc_reg(st,&current, 0, CCREG);
   dirty_reg(&current, CCREG);
   current.wasconst = 0;
@@ -7530,7 +7530,7 @@ static noinline void pass3_register_alloc(struct compile_state *st, u_int addr)
     cc=-1;
     dops[1].bt=1;
     ds=1;
-    unneeded_reg[0]=1;
+    st->unneeded_reg[0]=1;
   }
 
   for(i=0;i<st->slen;i++)
@@ -7555,14 +7555,14 @@ static noinline void pass3_register_alloc(struct compile_state *st, u_int addr)
     regs[i].loadedconst=0;
     if (!dops[i].is_jump) {
       if(i+1<st->slen) {
-        current.u=unneeded_reg[i+1]&~((1LL<<dops[i].rs1)|(1LL<<dops[i].rs2));
+        current.u=st->unneeded_reg[i+1]&~((1LL<<dops[i].rs1)|(1LL<<dops[i].rs2));
         current.u|=1;
       } else {
         current.u=1;
       }
     } else {
       if(i+1<st->slen) {
-        current.u=branch_unneeded_reg[i]&~((1LL<<dops[i+1].rs1)|(1LL<<dops[i+1].rs2));
+        current.u=st->branch_unneeded_reg[i]&~((1LL<<dops[i+1].rs1)|(1LL<<dops[i+1].rs2));
         current.u&=~((1LL<<dops[i].rs1)|(1LL<<dops[i].rs2));
         current.u|=1;
       } else {
@@ -7575,9 +7575,9 @@ static noinline void pass3_register_alloc(struct compile_state *st, u_int addr)
       ds=0; // Skip delay slot, already allocated as part of branch
       // ...but we need to alloc it in case something jumps here
       if(i+1<st->slen) {
-        current.u=branch_unneeded_reg[i-1]&unneeded_reg[i+1];
+        current.u=st->branch_unneeded_reg[i-1]&st->unneeded_reg[i+1];
       }else{
-        current.u=branch_unneeded_reg[i-1];
+        current.u=st->branch_unneeded_reg[i-1];
       }
       current.u&=~((1LL<<dops[i].rs1)|(1LL<<dops[i].rs2));
       current.u|=1;
@@ -7899,7 +7899,7 @@ static noinline void pass3_register_alloc(struct compile_state *st, u_int addr)
           memcpy(&branch_regs[i-1],&current,sizeof(current));
           branch_regs[i-1].isconst=0;
           branch_regs[i-1].wasconst=0;
-          branch_regs[i-1].u=branch_unneeded_reg[i-1]&~((1LL<<dops[i-1].rs1)|(1LL<<dops[i-1].rs2));
+          branch_regs[i-1].u=st->branch_unneeded_reg[i-1]&~((1LL<<dops[i-1].rs1)|(1LL<<dops[i-1].rs2));
           alloc_cc(&branch_regs[i-1],i-1);
           dirty_reg(&branch_regs[i-1],CCREG);
           if(dops[i-1].rt1==31) { // JAL
@@ -7913,7 +7913,7 @@ static noinline void pass3_register_alloc(struct compile_state *st, u_int addr)
           memcpy(&branch_regs[i-1],&current,sizeof(current));
           branch_regs[i-1].isconst=0;
           branch_regs[i-1].wasconst=0;
-          branch_regs[i-1].u=branch_unneeded_reg[i-1]&~((1LL<<dops[i-1].rs1)|(1LL<<dops[i-1].rs2));
+          branch_regs[i-1].u=st->branch_unneeded_reg[i-1]&~((1LL<<dops[i-1].rs1)|(1LL<<dops[i-1].rs2));
           alloc_cc(&branch_regs[i-1],i-1);
           dirty_reg(&branch_regs[i-1],CCREG);
           alloc_reg(st,&branch_regs[i-1],i-1,dops[i-1].rs1);
@@ -7939,14 +7939,14 @@ static noinline void pass3_register_alloc(struct compile_state *st, u_int addr)
                (dops[i-1].rs2&&(dops[i-1].rs2==dops[i].rt1||dops[i-1].rs2==dops[i].rt2))) {
               // The delay slot overwrote one of our conditions
               // Delay slot goes after the test (in order)
-              current.u=branch_unneeded_reg[i-1]&~((1LL<<dops[i].rs1)|(1LL<<dops[i].rs2));
+              current.u=st->branch_unneeded_reg[i-1]&~((1LL<<dops[i].rs1)|(1LL<<dops[i].rs2));
               current.u|=1;
               delayslot_alloc(st,&current,i);
               current.isconst=0;
             }
             else
             {
-              current.u=branch_unneeded_reg[i-1]&~((1LL<<dops[i-1].rs1)|(1LL<<dops[i-1].rs2));
+              current.u=st->branch_unneeded_reg[i-1]&~((1LL<<dops[i-1].rs1)|(1LL<<dops[i-1].rs2));
               // Alloc the branch condition registers
               if(dops[i-1].rs1) alloc_reg(st,&current,i-1,dops[i-1].rs1);
               if(dops[i-1].rs2) alloc_reg(st,&current,i-1,dops[i-1].rs2);
@@ -7965,14 +7965,14 @@ static noinline void pass3_register_alloc(struct compile_state *st, u_int addr)
             if(dops[i-1].rs1==dops[i].rt1||dops[i-1].rs1==dops[i].rt2) {
               // The delay slot overwrote the branch condition
               // Delay slot goes after the test (in order)
-              current.u=branch_unneeded_reg[i-1]&~((1LL<<dops[i].rs1)|(1LL<<dops[i].rs2));
+              current.u=st->branch_unneeded_reg[i-1]&~((1LL<<dops[i].rs1)|(1LL<<dops[i].rs2));
               current.u|=1;
               delayslot_alloc(st,&current,i);
               current.isconst=0;
             }
             else
             {
-              current.u=branch_unneeded_reg[i-1]&~(1LL<<dops[i-1].rs1);
+              current.u=st->branch_unneeded_reg[i-1]&~(1LL<<dops[i-1].rs1);
               // Alloc the branch condition register
               alloc_reg(st,&current,i-1,dops[i-1].rs1);
             }
@@ -7990,14 +7990,14 @@ static noinline void pass3_register_alloc(struct compile_state *st, u_int addr)
             if(dops[i-1].rs1==dops[i].rt1||dops[i-1].rs1==dops[i].rt2) {
               // The delay slot overwrote the branch condition
               // Delay slot goes after the test (in order)
-              current.u=branch_unneeded_reg[i-1]&~((1LL<<dops[i].rs1)|(1LL<<dops[i].rs2));
+              current.u=st->branch_unneeded_reg[i-1]&~((1LL<<dops[i].rs1)|(1LL<<dops[i].rs2));
               current.u|=1;
               delayslot_alloc(st,&current,i);
               current.isconst=0;
             }
             else
             {
-              current.u=branch_unneeded_reg[i-1]&~(1LL<<dops[i-1].rs1);
+              current.u=st->branch_unneeded_reg[i-1]&~(1LL<<dops[i-1].rs1);
               // Alloc the branch condition register
               alloc_reg(st,&current,i-1,dops[i-1].rs1);
             }
@@ -8198,11 +8198,11 @@ static noinline void pass4_cull_unused_regs(struct compile_state *st)
       // But do so if this is a branch target, otherwise we
       // might have to load the register before the branch.
       if((regs[i].wasdirty>>hr)&1) {
-        if((regmap_pre[i][hr]>0&&!((unneeded_reg[i]>>regmap_pre[i][hr])&1))) {
+        if((regmap_pre[i][hr]>0&&!((st->unneeded_reg[i]>>regmap_pre[i][hr])&1))) {
           if(dops[i-1].rt1==regmap_pre[i][hr]) nr|=1<<hr;
           if(dops[i-1].rt2==regmap_pre[i][hr]) nr|=1<<hr;
         }
-        if((regs[i].regmap_entry[hr]>0&&!((unneeded_reg[i]>>regs[i].regmap_entry[hr])&1))) {
+        if((regs[i].regmap_entry[hr]>0&&!((st->unneeded_reg[i]>>regs[i].regmap_entry[hr])&1))) {
           if(dops[i-1].rt1==regs[i].regmap_entry[hr]) nr|=1<<hr;
           if(dops[i-1].rt2==regs[i].regmap_entry[hr]) nr|=1<<hr;
         }
@@ -8379,7 +8379,7 @@ static noinline void pass5a_preallocate1(struct compile_state *st)
               for(j=t;j<=i;j++)
               {
                 //printf("Test %x -> %x, %x %d/%d\n",start+i*4,cinfo[i].ba,start+j*4,hr,r);
-                if(r<34&&((unneeded_reg[j]>>r)&1)) break;
+                if(r<34&&((st->unneeded_reg[j]>>r)&1)) break;
                 assert(r < 64);
                 if(regs[j].regmap[hr]==f_regmap[hr]&&f_regmap[hr]<TEMPREG) {
                   //printf("Hit %x -> %x, %x %d/%d\n",start+i*4,cinfo[i].ba,start+j*4,hr,r);
@@ -8788,11 +8788,10 @@ static noinline void pass5b_preallocate2(struct compile_state *st)
 
 // Write back dirty registers as soon as we will no longer modify them,
 // so that we don't end up with lots of writes at the branches.
-static noinline void pass6_clean_registers(struct compile_state *st,
+static noinline void pass6_clean_registers_r(struct compile_state *st,
+  u_int wont_dirty[MAXBLOCK], u_int will_dirty[MAXBLOCK],
   int istart, int iend, int wr)
 {
-  static u_int wont_dirty[MAXBLOCK];
-  static u_int will_dirty[MAXBLOCK];
   u_int start = st->start;
   int i;
   int r;
@@ -8932,8 +8931,8 @@ static noinline void pass6_clean_registers(struct compile_state *st,
                   temp_will_dirty&=~(1<<r);
                   temp_wont_dirty&=~(1<<r);
                   if(regmap_pre[i][r]>0 && regmap_pre[i][r]<34) {
-                    temp_will_dirty|=((unneeded_reg[i]>>regmap_pre[i][r])&1)<<r;
-                    temp_wont_dirty|=((unneeded_reg[i]>>regmap_pre[i][r])&1)<<r;
+                    temp_will_dirty|=((st->unneeded_reg[i]>>regmap_pre[i][r])&1)<<r;
+                    temp_wont_dirty|=((st->unneeded_reg[i]>>regmap_pre[i][r])&1)<<r;
                   } else {
                     temp_will_dirty|=1<<r;
                     temp_wont_dirty|=1<<r;
@@ -8945,7 +8944,8 @@ static noinline void pass6_clean_registers(struct compile_state *st,
           if(wr) {
             will_dirty[i]=temp_will_dirty;
             wont_dirty[i]=temp_wont_dirty;
-            pass6_clean_registers(st, (cinfo[i].ba-start)>>2,i-1,0);
+            pass6_clean_registers_r(st, wont_dirty, will_dirty,
+              (cinfo[i].ba - start) >> 2, i-1, 0);
           }else{
             // Limit recursion.  It can take an excessive amount
             // of time if there are a lot of nested loops.
@@ -8968,8 +8968,8 @@ static noinline void pass6_clean_registers(struct compile_state *st,
                   wont_dirty_i|=wont_dirty[(cinfo[i].ba-start)>>2]&(1<<r);
                 }
                 if(branch_regs[i].regmap[r]>=0) {
-                  will_dirty_i|=((unneeded_reg[(cinfo[i].ba-start)>>2]>>branch_regs[i].regmap[r])&1)<<r;
-                  wont_dirty_i|=((unneeded_reg[(cinfo[i].ba-start)>>2]>>branch_regs[i].regmap[r])&1)<<r;
+                  will_dirty_i|=((st->unneeded_reg[(cinfo[i].ba-start)>>2]>>branch_regs[i].regmap[r])&1)<<r;
+                  wont_dirty_i|=((st->unneeded_reg[(cinfo[i].ba-start)>>2]>>branch_regs[i].regmap[r])&1)<<r;
                 }
               }
             }
@@ -9000,8 +9000,8 @@ static noinline void pass6_clean_registers(struct compile_state *st,
                   wont_dirty_i|=wont_dirty[(cinfo[i].ba-start)>>2]&(1<<r);
                 }
                 else if(target_reg>=0) {
-                  will_dirty_i&=((unneeded_reg[(cinfo[i].ba-start)>>2]>>target_reg)&1)<<r;
-                  wont_dirty_i|=((unneeded_reg[(cinfo[i].ba-start)>>2]>>target_reg)&1)<<r;
+                  will_dirty_i&=((st->unneeded_reg[(cinfo[i].ba-start)>>2]>>target_reg)&1)<<r;
+                  wont_dirty_i|=((st->unneeded_reg[(cinfo[i].ba-start)>>2]>>target_reg)&1)<<r;
                 }
               }
             }
@@ -9127,8 +9127,8 @@ static noinline void pass6_clean_registers(struct compile_state *st,
           will_dirty_i&=~(1<<r);
           wont_dirty_i&=~(1<<r);
           if(regmap_pre[i][r]>0 && regmap_pre[i][r]<34) {
-            will_dirty_i|=((unneeded_reg[i]>>regmap_pre[i][r])&1)<<r;
-            wont_dirty_i|=((unneeded_reg[i]>>regmap_pre[i][r])&1)<<r;
+            will_dirty_i|=((st->unneeded_reg[i]>>regmap_pre[i][r])&1)<<r;
+            wont_dirty_i|=((st->unneeded_reg[i]>>regmap_pre[i][r])&1)<<r;
           } else {
             wont_dirty_i|=1<<r;
             /*printf("i: %x (%d) mismatch: %d\n",start+i*4,i,r);assert(!((will_dirty>>r)&1));*/
@@ -9137,6 +9137,14 @@ static noinline void pass6_clean_registers(struct compile_state *st,
       }
     }
   }
+}
+
+static void pass6_clean_registers(struct compile_state *st,
+  int istart, int iend)
+{
+  u_int wont_dirty[MAXBLOCK];
+  u_int will_dirty[MAXBLOCK];
+  pass6_clean_registers_r(st, wont_dirty, will_dirty, istart, iend, 1);
 }
 
 static u_int *get_jump_outs(struct block_info *block)
@@ -9426,7 +9434,7 @@ static int noinline new_recompile_block(u_int addr)
   pass5b_preallocate2(&st);
 
   /* Pass 6 - Optimize clean/dirty state */
-  pass6_clean_registers(&st, 0, st.slen - 1, 1);
+  pass6_clean_registers(&st, 0, st.slen - 1);
 
   /* Pass 7 */
   for (i = st.slen - 1; i >= 0; i--)
@@ -9491,7 +9499,7 @@ static int noinline new_recompile_block(u_int addr)
       #ifndef DESTRUCTIVE_WRITEBACK
       if (i < 2 || !dops[i-2].is_ujump)
       {
-        wb_valid(regmap_pre[i],regs[i].regmap_entry,dirty_pre,regs[i].wasdirty,unneeded_reg[i]);
+        wb_valid(regmap_pre[i],regs[i].regmap_entry,dirty_pre,regs[i].wasdirty,st.unneeded_reg[i]);
       }
       if((dops[i].itype==CJUMP||dops[i].itype==SJUMP)) {
         dirty_pre=branch_regs[i].dirty;
@@ -9502,7 +9510,7 @@ static int noinline new_recompile_block(u_int addr)
       // write back
       if (i < 2 || !dops[i-2].is_ujump)
       {
-        wb_invalidate(regmap_pre[i],regs[i].regmap_entry,regs[i].wasdirty,unneeded_reg[i]);
+        wb_invalidate(regmap_pre[i],regs[i].regmap_entry,regs[i].wasdirty,st.unneeded_reg[i]);
         loop_preload(regmap_pre[i],regs[i].regmap_entry);
       }
       // branch target entry point
