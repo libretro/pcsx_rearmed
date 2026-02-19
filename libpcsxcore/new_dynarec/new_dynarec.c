@@ -4357,8 +4357,10 @@ static void speculate_register_values(struct compile_state *st, int i)
     case SHIFT:
     case LOADLR:
     case MOV:
-      smrv_strong_next&=~(1<<dops[i].rt1);
-      smrv_weak_next&=~(1<<dops[i].rt1);
+      if (dops[i].rt1 < 32) {
+        smrv_strong_next &= ~(1 << dops[i].rt1);
+        smrv_weak_next &= ~(1 << dops[i].rt1);
+      }
       break;
     case COP0:
     case COP2:

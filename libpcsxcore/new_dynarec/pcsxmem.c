@@ -31,25 +31,22 @@ static uintptr_t mem_ffwtab[(1+2+4) * 0x1000 / 4];
 //static uintptr_t mem_unmrtab[(1+2+4) * 0x1000 / 4];
 static uintptr_t mem_unmwtab[(1+2+4) * 0x1000 / 4];
 
-static
-#ifdef __clang__
-// When this is called in a loop, and 'h' is a function pointer, clang will crash.
-__attribute__ ((noinline))
-#endif
-void map_item(uintptr_t *out, const void *h, uintptr_t flag)
+static void map_item_(uintptr_t *out, uintptr_t hv, uintptr_t flag)
 {
-	uintptr_t hv = (uintptr_t)h;
 	if (hv & 1) {
-		SysPrintf("FATAL: %p has LSB set\n", h);
+		SysPrintf("FATAL: %zx has LSB set\n", hv);
 		abort();
 	}
 	*out = (hv >> 1) | (flag << (sizeof(hv) * 8 - 1));
 }
 
+#define map_item(out_, h_, flag_) \
+	map_item_(out_, (uintptr_t)(h_), flag_)
+
 // size must be power of 2, at least 4k
 #define map_l1_mem(tab, i, addr, size, base) \
-	map_item(&tab[((u32)(addr) >> 12) + i], \
-		 (u8 *)(base) - (u32)((addr) + ((i << 12) & ~(size - 1))), 0)
+	map_item_(&tab[((u32)(addr) >> 12) + i], \
+		 (uintptr_t)(base) - (u32)((addr) + ((i << 12) & ~(size - 1))), 0)
 
 #define IOMEM32(a) (((a) & 0xfff) / 4)
 #define IOMEM16(a) (0x1000/4 + (((a) & 0xfff) / 2))
