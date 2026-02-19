@@ -335,7 +335,6 @@ else ifeq ($(platform), vita)
 	CFLAGS += -fno-optimize-sibling-calls # broken arm->thumb tailcalls?
 	CFLAGS += -I$(VITASDK)/include -Ifrontend/vita
 	CFLAGS += -DNO_DYLIB
-	CFLAGS_LAST += -O3
 	ASFLAGS += -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon
 
 	HAVE_NEON_ASM = 1
@@ -361,7 +360,6 @@ else ifeq ($(platform), ctr)
 	CFLAGS += -march=armv6k -mtune=mpcore -mfloat-abi=hard -marm -mfpu=vfp -mtp=soft
 	CFLAGS += -mword-relocations
 	CFLAGS += -fomit-frame-pointer
-	CFLAGS_LAST += -O3
 	# CFLAGS += -funroll-loops # ~500K of bloat
 	CFLAGS += -Ifrontend/3ds -I$(CTRULIB)/include
 	CFLAGS += -Werror=implicit-function-declaration
