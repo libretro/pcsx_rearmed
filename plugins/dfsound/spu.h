@@ -29,7 +29,8 @@ void CALLBACK SPUwriteRegister(unsigned long, unsigned short, unsigned int);
 unsigned short CALLBACK SPUreadRegister(unsigned long, unsigned int);
 void CALLBACK SPUregisterCallback(void (*cb)(int));
 void CALLBACK SPUregisterScheduleCb(void (*cb)(unsigned int));
-long CALLBACK SPUfreeze(unsigned int, struct SPUFreeze *, unsigned int);
+long CALLBACK SPUfreeze(int ulFreezeMode, struct SPUFreeze * pF, unsigned short **ram,
+		void * pF2, unsigned int cycles);
 void CALLBACK SPUasync(unsigned int, unsigned int);
 
 void CALLBACK SPUreadDMAMem(unsigned short * pusPSXMem,int iSize,unsigned int cycles);
@@ -42,6 +43,7 @@ void CALLBACK SPUsetCDvol(unsigned char ll, unsigned char lr,
 
 // internal
 void ClearWorkingState(void);
-long DoFreeze(unsigned int, struct SPUFreeze *, unsigned int);
+long DoFreeze(int ulFreezeMode, struct SPUFreeze * pF, unsigned short **ram,
+		void * pF2, unsigned int cycles);
 
 #endif /* __P_SPU_H__ */

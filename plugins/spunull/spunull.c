@@ -400,10 +400,13 @@ typedef struct
 
 ////////////////////////////////////////////////////////////////////////
 
-long CALLBACK SPUfreeze(unsigned long ulFreezeMode,SPUFreeze_t * pF,unsigned int cycles)
+long DoFreeze(int ulFreezeMode, SPUFreeze_t * pF, unsigned short **ram,
+ void * pF2, unsigned int cycles)
 {
  int i;
 
+ if (ram)
+  *ram = spuMem;
  if(!pF) return 0;
 
  if(ulFreezeMode)
@@ -417,16 +420,12 @@ long CALLBACK SPUfreeze(unsigned long ulFreezeMode,SPUFreeze_t * pF,unsigned int
 
    if(ulFreezeMode==2) return 1;
 
-   memcpy(pF->SPURam, spuMem, 0x80000);
    memcpy(pF->SPUPorts, regArea, 0x200);
-   // dummy:
-   memset(&pF->xa, 0, sizeof(xa_decode_t));
    return 1;
   }
 
  if(ulFreezeMode!=0) return 0;
 
- memcpy(spuMem, pF->SPURam, 0x80000);
  memcpy(regArea, pF->SPUPorts, 0x200);
 
  for(i=0;i<0x100;i++)

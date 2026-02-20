@@ -1411,12 +1411,12 @@ static void exit_spu_thread(void)
 
 #endif
 
-long CALLBACK SPUfreeze(unsigned int ulFreezeMode, struct SPUFreeze * pF,
- unsigned int cycles)
+long CALLBACK SPUfreeze(int ulFreezeMode, SPUFreeze_t * pF, unsigned short **ram,
+ void * pF2, unsigned int cycles)
 {
  if (worker != NULL)
   sync_worker_thread(1);
- return DoFreeze(ulFreezeMode, pF, cycles);
+ return DoFreeze(ulFreezeMode, pF, ram, pF2, cycles);
 }
 
 // SPUINIT: this func will be called first by the main emu

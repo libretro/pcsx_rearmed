@@ -93,7 +93,7 @@ extern uint32_t GPUreadData(void);
 extern void GPUreadDataMem(uint32_t *, int);
 extern long GPUdmaChain(uint32_t *, uint32_t, uint32_t *, int32_t *);
 extern void GPUupdateLace(void);
-extern long GPUfreeze(uint32_t, void *);
+extern long GPUfreeze(uint32_t, void *, uint16_t **);
 extern void GPUvBlank(int, int);
 extern void GPUgetScreenInfo(int *y, int *base_hres);
 extern void GPUrearmedCallbacks(const struct rearmed_cbs *cbs);

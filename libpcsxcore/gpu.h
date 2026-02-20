@@ -30,7 +30,7 @@ typedef struct GPUFreeze {
 	uint32_t ulFreezeVersion;
 	uint32_t ulStatus;
 	uint32_t ulControl[256];
-	unsigned char psxVRam[1024*512*2];
+	unsigned char psxVRam[0]; // 1024*512*2 // saved separately
 } GPUFreeze_t;
 
 #define PSXGPU_LCF     (1u<<31)

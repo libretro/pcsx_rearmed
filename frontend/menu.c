@@ -816,15 +816,15 @@ static void draw_savestate_bg(int slot)
 		return;
 	}
 
-	gpu = malloc(sizeof(*gpu));
+	gpu = malloc(sizeof(*gpu) + 1024*512*2);
 	if (gpu == NULL) {
 		gzclose(f);
 		return;
 	}
 
-	ret = gzread(f, gpu, sizeof(*gpu));
+	ret = gzread(f, gpu, sizeof(*gpu) + 1024*512*2);
 	gzclose(f);
-	if (ret != sizeof(*gpu)) {
+	if (ret != sizeof(*gpu) + 1024*512*2) {
 		fprintf(stderr, "gzread failed\n");
 		goto out;
 	}
@@ -1815,15 +1815,16 @@ static void draw_frame_debug(GPUFreeze_t *gpuf, int x, int y)
 {
 	int w = min(g_menuscreen_w, 1024);
 	int h = min(g_menuscreen_h, 512);
-	u16 *d = g_menuscreen_ptr;
-	u16 *s = (u16 *)gpuf->psxVRam + y * 1024 + x;
+	u16 *s, *d = g_menuscreen_ptr;
+	uint16_t *vram = NULL;
 	char buff[64];
 	int ty = 1;
 
 	gpuf->ulFreezeVersion = 1;
 	if (GPU_freeze != NULL)
-		GPU_freeze(1, gpuf);
+		GPU_freeze(1, gpuf, &vram);
 
+	s = vram + y * 1024 + x;
 	for (; h > 0; h--, d += g_menuscreen_w, s += 1024)
 		bgr555_to_rgb565(d, s, w);
 

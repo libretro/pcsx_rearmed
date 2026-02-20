@@ -254,20 +254,16 @@ typedef struct xa_decode {
 	short			pcm[16384];
 } xa_decode_t;
 
-typedef struct {
-	char PluginName[8];
-	unsigned int PluginVersion;
-	unsigned int Size;
-} SPUFreezeHdr_t;
-
 typedef struct SPUFreeze {
 	char PluginName[8];
 	unsigned int PluginVersion;
 	unsigned int Size;
 	unsigned char SPUPorts[0x200];
-	unsigned char SPURam[0x80000];
-	xa_decode_t xa;
+	//unsigned char SPURam[0x80000]; // handled separately
+	//xa_decode_t xa;
 } SPUFreeze_t;
+
+#define SPUFREEZE_F2_MAX_SIZE 0xc000
 
 /*         NET PlugIn v2       */
 /* Added by linuzappz@pcsx.net */
