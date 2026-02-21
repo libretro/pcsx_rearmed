@@ -727,6 +727,7 @@ static void lightrec_plugin_notify(enum R3000Anote note, void *data)
 		lightrec_plugin_sync_regs_to_pcsx(data == NULL);
 		break;
 	case R3000ACPU_NOTIFY_AFTER_LOAD:
+	case R3000ACPU_NOTIFY_AFTER_LOAD_STATE:
 		lightrec_plugin_sync_regs_from_pcsx(data == NULL);
 		if (data == NULL)
 			lightrec_invalidate_all(lightrec_state);

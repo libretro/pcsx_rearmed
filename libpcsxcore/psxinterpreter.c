@@ -1253,6 +1253,7 @@ static void intNotify(enum R3000Anote note, void *data) {
 		dloadFlush(&psxRegs);
 		break;
 	case R3000ACPU_NOTIFY_AFTER_LOAD:
+	case R3000ACPU_NOTIFY_AFTER_LOAD_STATE:
 		dloadClear(&psxRegs);
 		psxRegs.subCycle = 0;
 		setupCop(psxRegs.CP0.n.SR);

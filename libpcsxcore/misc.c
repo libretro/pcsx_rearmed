@@ -920,7 +920,7 @@ int LoadState(const char *file) {
 	if (Config.HLE)
 		psxBiosCheckExe(biosBranchCheckOld, 0x60, 1);
 
-	psxCpu->Notify(R3000ACPU_NOTIFY_AFTER_LOAD, NULL);
+	psxCpu->Notify(R3000ACPU_NOTIFY_AFTER_LOAD_STATE, NULL);
 
 	result = 0;
 cleanup:

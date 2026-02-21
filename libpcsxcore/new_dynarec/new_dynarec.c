@@ -325,7 +325,6 @@ static struct compile_info
   static u_int vsync_hack;
 #ifdef STAT_PRINT
   static int stat_bc_direct;
-  static int stat_bc_pre;
   static int stat_bc_restore;
   static int stat_ht_lookups;
   static int stat_jump_in_lookups;
@@ -433,6 +432,7 @@ static void ndrc_write_invalidate_many(u_int addr, u_int end);
 
 static int new_recompile_block(u_int addr);
 static void invalidate_block(struct block_info *block);
+static void block_clear_jump_outs(struct block_info *block, int unlink);
 static void exception_assemble(struct compile_state *st, int i,
   const struct regstat *i_regs, int ccadj_);
 
@@ -1533,6 +1533,16 @@ static void blocks_clear(struct block_info **head)
   }
 }
 
+static void unlink_jump(u_int target_vaddr, void *stub)
+{
+  void *host_addr = find_extjump_insn(stub);
+  inv_debug("INV: rm link to %08x (tc_offs %06zx->%06zx)\n", target_vaddr,
+    (u_char *)host_addr - ndrc->translation_cache,
+    (u_char *)stub - ndrc->translation_cache);
+  mark_clear_cache(host_addr);
+  set_jump_target(host_addr, stub); // point back to dyna_linker stub
+}
+
 // This is called when we write to a compiled block (see do_invstub)
 static void unlink_jumps_vaddr_range(u_int start, u_int end)
 {
@@ -1549,13 +1559,7 @@ static void unlink_jumps_vaddr_range(u_int start, u_int end)
         continue;
       }
 
-      void *host_addr = find_extjump_insn(ji->e[i].stub);
-      inv_debug("INV: rm link to %08x (tc_offs %06zx->%06zx)\n", ji->e[i].target_vaddr,
-        (u_char *)host_addr - ndrc->translation_cache,
-        (u_char *)ji->e[i].stub - ndrc->translation_cache);
-      mark_clear_cache(host_addr);
-      set_jump_target(host_addr, ji->e[i].stub); // point back to dyna_linker stub
-
+      unlink_jump(ji->e[i].target_vaddr, ji->e[i].stub);
       stat_dec(stat_links);
       ji->count--;
       if (i < ji->count) {
@@ -1690,8 +1694,6 @@ void ndrc_write_invalidate_one(u_int addr)
   ndrc_write_invalidate_many(addr, addr + 4);
 }
 
-// This is called when loading a save state.
-// Anything could have changed, so invalidate everything.
 void new_dynarec_invalidate_all_pages(void)
 {
   struct block_info *block;
@@ -1703,6 +1705,14 @@ void new_dynarec_invalidate_all_pages(void)
       if (!block->source) // hack block?
         continue;
       invalidate_block(block);
+    }
+  }
+  for (page = 0; page < ARRAY_SIZE(jumps); page++) {
+    struct jump_info *ji = jumps[page];
+    if (ji) {
+      assert(ji->count == 0);
+      free(ji);
+      jumps[page] = NULL;
     }
   }
 
@@ -6633,24 +6643,36 @@ void new_dynarec_load_blocks(const void *save, int size)
   uint32_t f;
   int i, b;
 
-  // restore clean blocks, if any
+  // update all block dirty-ness
   for (page = 0, b = i = 0; page < ARRAY_SIZE(blocks); page++) {
     for (block = blocks[page]; block != NULL; block = block->next_by_vaddr, b++) {
-      if (!block->is_dirty)
+      if (!block->source) // hack block?
         continue;
       assert(block->source && block->copy);
-      if (memcmp(block->source, block->copy, block->len))
+      if (memcmp(block->source, block->copy, block->len)) {
+        invalidate_block(block);
+        block_clear_jump_outs(block, 1);
         continue;
+      }
 
       // see try_restore_block
-      block->is_dirty = 0;
+      block->is_dirty = block->inv_near_misses = 0;
       mark_invalid_code(block->start, block->len, 0);
       i++;
     }
   }
   inv_debug("load_blocks: %d/%d clean blocks\n", i, b);
 
-  // change GPRs for speculation to at least partially work..
+  for (page = 0; page < ARRAY_SIZE(jumps); page++) {
+    if (jumps[page] && jumps[page]->count == 0) {
+      free(jumps[page]);
+      jumps[page] = NULL;
+    }
+  }
+  do_clear_cache();
+  mini_ht_clear();
+
+  // change GPRs for speculation to at least partially work...
   memcpy(regs_save, &psxRegs.GPR, sizeof(regs_save));
   for (i = 1; i < 32; i++)
     psxRegs.GPR.r[i] = 0x80000000;
@@ -6682,12 +6704,12 @@ void new_dynarec_print_stats(void)
       lmem += sizeof(*ji) + ji->alloc * sizeof(ji->e[0]) + sizeof(size_t) * 2;
   }
 
-  printf("cc %3d,%3d,%3d lu%6d,%3d,%3d c%3d inv%3d,%3d tc_offs %06zx b %u l %u/%zd\n",
-    stat_bc_pre, stat_bc_direct, stat_bc_restore,
+  printf("cc %3d,%3d lu%6d,%3d,%3d c%3d inv%3d,%3d tc_offs %06zx b %u l %u/%zd\n",
+    stat_bc_direct, stat_bc_restore,
     stat_ht_lookups, stat_jump_in_lookups, stat_restore_tries,
     stat_restore_compares, stat_inv_addr_calls, stat_inv_hits,
     out - ndrc->translation_cache, stat_blocks, stat_links, lmem);
-  stat_bc_direct = stat_bc_pre = stat_bc_restore =
+  stat_bc_direct = stat_bc_restore =
   stat_ht_lookups = stat_jump_in_lookups = stat_restore_tries =
   stat_restore_compares = stat_inv_addr_calls = stat_inv_hits = 0;
 #endif
@@ -9155,39 +9177,46 @@ static u_int *get_jump_outs(struct block_info *block)
     block->jump_in_cnt * sizeof(block->jump_in[0]));
 }
 
+static void block_clear_jump_outs(struct block_info *block, int unlink)
+{
+  u_int *jump_outs;
+  int jo, i;
+
+  jump_outs = get_jump_outs(block);
+  for (jo = 0; jo < block->jump_out_cnt; jo++) {
+    u_int t_vaddr = jump_outs[jo];
+    u_int t_page = get_page(t_vaddr);
+    struct jump_info *ji = jumps[t_page];
+    if (ji)
+    for (i = 0; i < ji->count; ) {
+      uintptr_t j_tc_offs;
+      if (t_vaddr != ji->e[i].target_vaddr) {
+        i++; continue;
+      }
+      j_tc_offs = (u_char *)ji->e[i].stub - ndrc->translation_cache;
+      if (j_tc_offs < block->tc_offs || j_tc_offs >= block->tc_offs + block->tc_len) {
+        i++; continue;
+      }
+      // remove the entry
+      if (unlink)
+        unlink_jump(ji->e[i].target_vaddr, ji->e[i].stub);
+      stat_dec(stat_links);
+      ji->count--;
+      if (i < ji->count)
+        ji->e[i] = ji->e[ji->count];
+    }
+  }
+}
+
 static void block_destroy(struct block_info *block)
 {
   u_int page = get_page(block->start);
   struct block_info **b_pptr;
-  u_int *jump_outs;
-  int i, j;
 
   if (block == block_last_compiled)
     block_last_compiled = NULL;
   invalidate_block(block);
-
-  jump_outs = get_jump_outs(block);
-  for (i = 0; i < block->jump_out_cnt; i++) {
-    u_int t_vaddr = jump_outs[i];
-    u_int t_page = get_page(t_vaddr);
-    struct jump_info *ji = jumps[t_page];
-    if (ji)
-    for (j = 0; j < ji->count; ) {
-      uintptr_t j_tc_offs;
-      if (t_vaddr != ji->e[j].target_vaddr) {
-        j++; continue;
-      }
-      j_tc_offs = (u_char *)ji->e[j].stub - ndrc->translation_cache;
-      if (j_tc_offs < block->tc_offs || j_tc_offs >= block->tc_offs + block->tc_len) {
-        j++; continue;
-      }
-      // remove the entry
-      stat_dec(stat_links);
-      ji->count--;
-      if (j < ji->count)
-        ji->e[j] = ji->e[ji->count];
-    }
-  }
+  block_clear_jump_outs(block, 0);
 
   // rm from the blocks list
   for (b_pptr = &blocks[page]; *b_pptr; b_pptr = &((*b_pptr)->next_by_vaddr)) {

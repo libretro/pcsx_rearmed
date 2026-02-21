@@ -48,8 +48,10 @@ enum R3000Aexception {
 enum R3000Anote {
 	R3000ACPU_NOTIFY_CACHE_ISOLATED = 0,
 	R3000ACPU_NOTIFY_CACHE_UNISOLATED = 1,
+	// this is to sync any cached cpu core state with one in psxRegs
 	R3000ACPU_NOTIFY_BEFORE_SAVE,  // data arg - hle if non-null
-	R3000ACPU_NOTIFY_AFTER_LOAD,
+	R3000ACPU_NOTIFY_AFTER_LOAD,   // data arg - full ram if null
+	R3000ACPU_NOTIFY_AFTER_LOAD_STATE, // same, but only after savestate load
 };
 
 enum blockExecCaller {
