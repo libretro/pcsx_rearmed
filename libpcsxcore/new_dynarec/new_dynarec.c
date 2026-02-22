@@ -6715,6 +6715,12 @@ void new_dynarec_print_stats(void)
 #endif
 }
 
+int new_dynarec_estimate_stack_size(void)
+{
+  // see: pass6_clean_registers
+  return (sizeof(struct compile_state) + (4+4) * MAXBLOCK + 20 * 1024) & ~4095;
+}
+
 static void force_intcall(int i)
 {
   memset(&dops[i], 0, sizeof(dops[i]));

@@ -36,6 +36,7 @@ void new_dynarec_clear_full(void);
 int  new_dynarec_save_blocks(void *save, int size);
 void new_dynarec_load_blocks(const void *save, int size);
 void new_dynarec_print_stats(void);
+int  new_dynarec_estimate_stack_size(void);
 
 int  new_dynarec_quick_check_range(unsigned int start, unsigned int end);
 void new_dynarec_invalidate_range(unsigned int start, unsigned int end);
