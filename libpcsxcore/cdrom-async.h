@@ -27,7 +27,7 @@ int  cdra_getStatus(struct CdrStat *stat);
 int  cdra_readTrack(const unsigned char *time);
 int  cdra_readCDDA(const unsigned char *time, void *buffer);
 int  cdra_readSub(const unsigned char *time, void *buffer);
-int  cdra_prefetch(unsigned char m, unsigned char s, unsigned char f);
+int  cdra_prefetch(unsigned char m, unsigned char s, unsigned char f, int is_cdda);
 
 int  cdra_is_physical(void);
 int  cdra_check_eject(int *inserted);

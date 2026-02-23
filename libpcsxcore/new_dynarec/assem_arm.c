@@ -146,41 +146,6 @@ static void set_jump_target(void *addr, void *target_)
   }
 }
 
-// This optionally copies the instruction from the target of the branch into
-// the space before the branch.  Works, but the difference in speed is
-// usually insignificant.
-#if 0
-static void set_jump_target_fillslot(int addr,u_int target,int copy)
-{
-  u_char *ptr=(u_char *)addr;
-  u_int *ptr2=(u_int *)ptr;
-  assert(!copy||ptr2[-1]==0xe28dd000);
-  if(ptr[3]==0xe2) {
-    assert(!copy);
-    assert((target-(u_int)ptr2-8)<4096);
-    *ptr2=(*ptr2&0xFFFFF000)|(target-(u_int)ptr2-8);
-  }
-  else {
-    assert((ptr[3]&0x0e)==0xa);
-    u_int target_insn=*(u_int *)target;
-    if((target_insn&0x0e100000)==0) { // ALU, no immediate, no flags
-      copy=0;
-    }
-    if((target_insn&0x0c100000)==0x04100000) { // Load
-      copy=0;
-    }
-    if(target_insn&0x08000000) {
-      copy=0;
-    }
-    if(copy) {
-      ptr2[-1]=target_insn;
-      target+=4;
-    }
-    *ptr2=(*ptr2&0xFF000000)|(((target-(u_int)ptr2-8)<<6)>>8);
-  }
-}
-#endif
-
 /* Literal pool */
 static void add_literal(int addr,int val)
 {
@@ -188,17 +153,6 @@ static void add_literal(int addr,int val)
   literals[literalcount][0]=addr;
   literals[literalcount][1]=val;
   literalcount++;
-}
-
-// from a pointer to external jump stub (which was produced by emit_extjump2)
-// find where the jumping insn is
-static void *find_extjump_insn(void *stub)
-{
-  int *ptr=(int *)(stub+4);
-  assert((*ptr&0x0fff0000)==0x059f0000); // ldr rx, [pc, #ofs]
-  u_int offset=*ptr&0xfff;
-  void **l_ptr=(void *)ptr+offset+8;
-  return *l_ptr;
 }
 
 // Allocate a specific ARM register.
@@ -985,7 +939,7 @@ static int can_jump_or_call(const void *a)
 static void emit_call(const void *a_)
 {
   int a = (int)a_;
-  assem_debug("bl %p%s\n", log_addr(a), func_name(a_));
+  assem_debug("bl %p%s\n", log_addr(a_), func_name(a_));
   u_int offset=genjmp(a);
   output_w32(0xeb000000|offset);
 }
@@ -1584,9 +1538,9 @@ static void literal_pool_jumpover(int n)
 }
 
 // parsed by find_extjump_insn, check_extjump2
-static void emit_extjump(u_char *addr, u_int target)
+static void emit_extjump_stub(u_char *addr, u_int target)
 {
-  u_char *ptr=(u_char *)addr;
+  u_char *ptr = addr;
   assert((ptr[3]&0x0e)==0xa);
   (void)ptr;
 
@@ -1595,6 +1549,17 @@ static void emit_extjump(u_char *addr, u_int target)
   assert(ndrc->translation_cache <= addr &&
          addr < ndrc->translation_cache + sizeof(ndrc->translation_cache));
   emit_far_jump(dyna_linker);
+}
+
+// from a pointer to external jump stub (which was produced by emit_extjump_stub)
+// find where the jumping insn is
+static void *find_extjump_insn(void *stub)
+{
+  int *ptr=(int *)(stub+4);
+  assert((*ptr&0x0fff0000)==0x059f0000); // ldr rx, [pc, #ofs]
+  u_int offset=*ptr&0xfff;
+  void **l_ptr=(void *)ptr+offset+8;
+  return *l_ptr;
 }
 
 static void check_extjump2(void *src)
@@ -1663,9 +1628,9 @@ static void mov_loadtype_adj(enum stub_type type,int rs,int rt)
 #include "pcsxmem.h"
 #include "pcsxmem_inline.c"
 
-static void do_readstub(int n)
+static void do_readstub(struct compile_state *st, int n)
 {
-  assem_debug("do_readstub %p\n", log_addr(start + stubs[n].a*4));
+  assem_debug("do_readstub %x\n", st->start + stubs[n].a*4);
   literal_pool(256);
   set_jump_target(stubs[n].addr, out);
   enum stub_type type=stubs[n].type;
@@ -1834,9 +1799,9 @@ static void inline_readstub(enum stub_type type, int i, u_int addr,
   restore_regs(reglist);
 }
 
-static void do_writestub(int n)
+static void do_writestub(struct compile_state *st, int n)
 {
-  assem_debug("do_writestub %p\n", log_addr(start + stubs[n].a*4));
+  assem_debug("do_writestub %x\n", st->start + stubs[n].a*4);
   literal_pool(256);
   set_jump_target(stubs[n].addr, out);
   enum stub_type type=stubs[n].type;
@@ -1954,10 +1919,11 @@ static void inline_writestub(enum stub_type type, int i, u_int addr,
 
 /* Special assem */
 
-static void c2op_prologue(u_int op, int i, const struct regstat *i_regs, u_int reglist)
+static void c2op_prologue(struct compile_state *st, u_int op, int i,
+  const struct regstat *i_regs, u_int reglist)
 {
   save_regs_all(reglist);
-  cop2_do_stall_check(op, i, i_regs, 0);
+  cop2_do_stall_check(st, op, i, i_regs, 0);
 #ifdef PCNT
   emit_movimm(op, 0);
   emit_far_call(pcnt_gte_start);
@@ -1992,9 +1958,9 @@ static void c2op_call_rgb_func(void *func,int lm,int need_ir,int need_flags)
   emit_far_call(need_flags?gteMACtoRGB:gteMACtoRGB_nf);
 }
 
-static void c2op_assemble(int i, const struct regstat *i_regs)
+static void c2op_assemble(struct compile_state *st, int i, const struct regstat *i_regs)
 {
-  u_int c2op = source[i] & 0x3f;
+  u_int c2op = st->source[i] & 0x3f;
   u_int reglist_full = get_host_reglist(i_regs->regmap);
   u_int reglist = reglist_full & CALLER_SAVE_REGS;
   int need_flags, need_ir;
@@ -2003,20 +1969,20 @@ static void c2op_assemble(int i, const struct regstat *i_regs)
     need_flags=!(gte_unneeded[i+1]>>63); // +1 because of how liveness detection works
     need_ir=(gte_unneeded[i+1]&0xe00)!=0xe00;
     assem_debug("gte op %08x, unneeded %016llx, need_flags %d, need_ir %d\n",
-      source[i],gte_unneeded[i+1],need_flags,need_ir);
+      st->source[i], gte_unneeded[i+1], need_flags, need_ir);
     if(HACK_ENABLED(NDHACK_GTE_NO_FLAGS))
       need_flags=0;
-    int shift = (source[i] >> 19) & 1;
-    int lm = (source[i] >> 10) & 1;
+    int shift = (st->source[i] >> 19) & 1;
+    int lm = (st->source[i] >> 10) & 1;
     switch(c2op) {
 #ifndef DRC_DBG
       case GTE_MVMVA: {
 #ifdef HAVE_ARMV5
-        int v  = (source[i] >> 15) & 3;
-        int cv = (source[i] >> 13) & 3;
-        int mx = (source[i] >> 17) & 3;
+        int v  = (st->source[i] >> 15) & 3;
+        int cv = (st->source[i] >> 13) & 3;
+        int mx = (st->source[i] >> 17) & 3;
         reglist=reglist_full&(CALLER_SAVE_REGS|0xf0); // +{r4-r7}
-        c2op_prologue(c2op,i,i_regs,reglist);
+        c2op_prologue(st, c2op, i, i_regs, reglist);
         /* r4,r5 = VXYZ(v) packed; r6 = &MX11(mx); r7 = &CV1(cv) */
         if(v<3)
           emit_ldrd(v*8,0,4);
@@ -2035,7 +2001,7 @@ static void c2op_assemble(int i, const struct regstat *i_regs)
         else
           emit_readword(&zeromem_ptr,7);
 #ifdef __ARM_NEON__
-        emit_movimm(source[i],1); // opcode
+        emit_movimm(st->source[i],1); // opcode
         emit_far_call(gteMVMVA_part_neon);
         if(need_flags) {
           emit_movimm(lm,1);
@@ -2052,15 +2018,15 @@ static void c2op_assemble(int i, const struct regstat *i_regs)
           c2op_call_MACtoIR(lm,need_flags);
 #endif
 #else /* if not HAVE_ARMV5 */
-        c2op_prologue(c2op,i,i_regs,reglist);
-        emit_movimm(source[i],1); // opcode
+        c2op_prologue(st,c2op,i,i_regs,reglist);
+        emit_movimm(st->source[i],1); // opcode
         emit_writeword(1,&psxRegs.code);
         emit_far_call(need_flags?gte_handlers[c2op]:gte_handlers_nf[c2op]);
 #endif
         break;
       }
       case GTE_OP:
-        c2op_prologue(c2op,i,i_regs,reglist);
+        c2op_prologue(st,c2op,i,i_regs,reglist);
         emit_far_call(shift?gteOP_part_shift:gteOP_part_noshift);
         if(need_flags||need_ir) {
           emit_addimm(FP,(int)&psxRegs.CP2D.r[0]-(int)&dynarec_local,0);
@@ -2068,15 +2034,15 @@ static void c2op_assemble(int i, const struct regstat *i_regs)
         }
         break;
       case GTE_DPCS:
-        c2op_prologue(c2op,i,i_regs,reglist);
+        c2op_prologue(st,c2op,i,i_regs,reglist);
         c2op_call_rgb_func(shift?gteDPCS_part_shift:gteDPCS_part_noshift,lm,need_ir,need_flags);
         break;
       case GTE_INTPL:
-        c2op_prologue(c2op,i,i_regs,reglist);
+        c2op_prologue(st,c2op,i,i_regs,reglist);
         c2op_call_rgb_func(shift?gteINTPL_part_shift:gteINTPL_part_noshift,lm,need_ir,need_flags);
         break;
       case GTE_SQR:
-        c2op_prologue(c2op,i,i_regs,reglist);
+        c2op_prologue(st,c2op,i,i_regs,reglist);
         emit_far_call(shift?gteSQR_part_shift:gteSQR_part_noshift);
         if(need_flags||need_ir) {
           emit_addimm(FP,(int)&psxRegs.CP2D.r[0]-(int)&dynarec_local,0);
@@ -2084,22 +2050,22 @@ static void c2op_assemble(int i, const struct regstat *i_regs)
         }
         break;
       case GTE_DCPL:
-        c2op_prologue(c2op,i,i_regs,reglist);
+        c2op_prologue(st,c2op,i,i_regs,reglist);
         c2op_call_rgb_func(gteDCPL_part,lm,need_ir,need_flags);
         break;
       case GTE_GPF:
-        c2op_prologue(c2op,i,i_regs,reglist);
+        c2op_prologue(st,c2op,i,i_regs,reglist);
         c2op_call_rgb_func(shift?gteGPF_part_shift:gteGPF_part_noshift,lm,need_ir,need_flags);
         break;
       case GTE_GPL:
-        c2op_prologue(c2op,i,i_regs,reglist);
+        c2op_prologue(st,c2op,i,i_regs,reglist);
         c2op_call_rgb_func(shift?gteGPL_part_shift:gteGPL_part_noshift,lm,need_ir,need_flags);
         break;
 #endif
       default:
-        c2op_prologue(c2op,i,i_regs,reglist);
+        c2op_prologue(st,c2op,i,i_regs,reglist);
 #ifdef DRC_DBG
-        emit_movimm(source[i],1); // opcode
+        emit_movimm(st->source[i],1); // opcode
         emit_writeword(1,&psxRegs.code);
 #endif
         emit_far_call(need_flags?gte_handlers[c2op]:gte_handlers_nf[c2op]);
@@ -2345,16 +2311,18 @@ static void do_miniht_jump(int rs,int rh,int ht) {
   do_jump_vaddr(rs);
 }
 
-static void do_miniht_insert(u_int return_address,int rt,int temp) {
+static void do_miniht_insert(struct compile_state *st, u_int return_address,
+  int rt, int temp)
+{
   #ifndef HAVE_ARMV7
   emit_movimm(return_address,rt); // PC into link register
-  add_to_linker(out,return_address,1);
+  add_to_linker(st, out, return_address, 1);
   emit_pcreladdr(temp);
   emit_writeword(rt,&mini_ht[(return_address&0xFF)>>3][0]);
   emit_writeword(temp,&mini_ht[(return_address&0xFF)>>3][1]);
   #else
   emit_movw(return_address&0x0000FFFF,rt);
-  add_to_linker(out,return_address,1);
+  add_to_linker(st, out, return_address, 1);
   emit_pcreladdr(temp);
   emit_writeword(temp,&mini_ht[(return_address&0xFF)>>3][1]);
   emit_movt(return_address&0xFFFF0000,rt);
@@ -2373,7 +2341,7 @@ static void arch_init(void)
   start_tcache_write(ops, (u_char *)ops + sizeof(ndrc->tramp.ops));
   for (i = 0; i < ARRAY_SIZE(ndrc->tramp.ops); i++)
     ops[i].ldrpc = 0xe5900000 | rd_rn_rm(15,15,0) | diff; // ldr pc, [=val]
-  end_tcache_write(ops, (u_char *)ops + sizeof(ndrc->tramp.ops));
+  end_tcache_write(ops, (u_char *)ops + sizeof(ndrc->tramp.ops), 1);
 }
 
 // vim:shiftwidth=2:expandtab

@@ -55,40 +55,6 @@ extern "C" {
 
 #define bool unsigned short
 
-#if 0
-typedef struct {
-	unsigned int ulFreezeVersion;
-	unsigned int ulStatus;
-	unsigned int ulControl[256];
-	unsigned char psxVRam[1024*1024*2];
-} GPUFreeze_t;
-
-long CALLBACK GPUinit();
-long CALLBACK GPUshutdown();
-long CALLBACK GPUopen(unsigned long *disp, char *cap, char *cfg);
-long CALLBACK GPUclose();
-unsigned long CALLBACK GPUreadData(void);
-void CALLBACK GPUreadDataMem(unsigned long * pMem, int iSize);
-unsigned long CALLBACK GPUreadStatus(void);
-void CALLBACK GPUwriteData(unsigned long gdata);
-void CALLBACK GPUwriteDataMem(unsigned long * pMem, int iSize);
-void CALLBACK GPUwriteStatus(unsigned long gdata);
-long CALLBACK GPUdmaChain(unsigned long * baseAddrL, unsigned long addr);
-void CALLBACK GPUupdateLace(void);
-void CALLBACK GPUmakeSnapshot(void);
-long CALLBACK GPUfreeze(unsigned long ulGetFreezeData,GPUFreeze_t * pF);
-long CALLBACK GPUgetScreenPic(unsigned char * pMem);
-long CALLBACK GPUshowScreenPic(unsigned char * pMem);
-//void CALLBACK GPUkeypressed(int keycode);
-//void CALLBACK GPUdisplayText(s8 * pText);
-//void CALLBACK GPUclearDynarec(void (CALLBACK *callback)(void));
-long CALLBACK GPUconfigure(void);
-long CALLBACK GPUtest(void);
-void CALLBACK GPUabout(void);
-#endif
-
-void           DoSnapShot(void);
-void		   GPUvSinc(void);
 void           updateDisplay(void);
 void           updateFrontDisplay(void);
 void           SetAutoFrameCap(void);
@@ -97,8 +63,6 @@ void           CheckVRamRead(int x, int y, int dx, int dy, bool bFront);
 void           CheckVRamReadEx(int x, int y, int dx, int dy);
 void           SetFixes(void);
 
-void PaintPicDot(unsigned char * p,unsigned char c);
-//void DrawNumBorPic(unsigned char *pMem, int lSelectedSlot);
 void ResizeWindow();
 
 ////////////////////////////////////////////////////////////////////////////

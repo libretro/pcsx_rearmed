@@ -129,7 +129,7 @@ static int lightrec_mmap_ram(bool hugetlb)
 	}
 
 	err = 0;
-	psxM = (s8 *)base;
+	psxRegs.ptrs.psxM = (u8 *)base;
 
 err_close_memfd:
 	close(memfd);
@@ -139,7 +139,7 @@ err_close_memfd:
 int lightrec_init_mmap(void)
 {
 	unsigned int i;
-	s8 *base, *target;
+	u8 *base, *target;
 	void *map;
 	int err = lightrec_mmap_ram(true);
 	if (err) {
@@ -150,7 +150,7 @@ int lightrec_init_mmap(void)
 		}
 	}
 
-	base = psxM;
+	base = psxRegs.ptrs.psxM;
 
 	target = base + 0x1f000000;
 	map = mmap(target, 0x10000,
@@ -164,7 +164,7 @@ int lightrec_init_mmap(void)
 	if (map != target)
 		SysMessage("lightrec: mapped parallel port at %p, wanted %p", map, target);
 
-	psxP = (s8 *)map;
+	psxRegs.ptrs.psxP = (u8 *)map;
 
 	target = base + 0x1fc00000;
 	map = mmap_huge(target, 0x200000,
@@ -178,7 +178,7 @@ int lightrec_init_mmap(void)
 	if (map != target)
 		SysMessage("lightrec: mapped bios at %p, wanted %p", map, target);
 
-	psxR = (s8 *)map;
+	psxRegs.ptrs.psxR = (u8 *)map;
 
 	target = base + 0x1f800000;
 	map = mmap(target, 0x10000,
@@ -192,7 +192,7 @@ int lightrec_init_mmap(void)
 	if (map != target)
 		SysMessage("lightrec: mapped scratchpad at %p, wanted %p", map, target);
 
-	psxH = (s8 *)map;
+	psxRegs.ptrs.psxH = (u8 *)map;
 
 	target = base + 0x800000;
 	map = mmap_huge(target, CODE_BUFFER_SIZE,
@@ -212,14 +212,14 @@ int lightrec_init_mmap(void)
 	return 0;
 
 err_unmap_scratch:
-	munmap(psxH, 0x10000);
+	munmap(psxRegs.ptrs.psxH, 0x10000);
 err_unmap_bios:
-	munmap(psxR, 0x200000);
+	munmap(psxRegs.ptrs.psxR, 0x200000);
 err_unmap_parallel:
-	munmap(psxP, 0x10000);
+	munmap(psxRegs.ptrs.psxP, 0x10000);
 err_unmap:
 	for (i = 0; i < 4; i++)
-		munmap((void *)((uintptr_t)psxM + i * 0x200000), 0x200000);
+		munmap((void *)((uintptr_t)psxRegs.ptrs.psxM + i * 0x200000), 0x200000);
 	return err;
 }
 
@@ -228,9 +228,9 @@ void lightrec_free_mmap(void)
 	unsigned int i;
 
 	munmap(code_buffer, CODE_BUFFER_SIZE);
-	munmap(psxH, 0x10000);
-	munmap(psxR, 0x200000);
-	munmap(psxP, 0x10000);
+	munmap(psxRegs.ptrs.psxH, 0x10000);
+	munmap(psxRegs.ptrs.psxR, 0x200000);
+	munmap(psxRegs.ptrs.psxP, 0x10000);
 	for (i = 0; i < 4; i++)
-		munmap((void *)((uintptr_t)psxM + i * 0x200000), 0x200000);
+		munmap((void *)((uintptr_t)psxRegs.ptrs.psxM + i * 0x200000), 0x200000);
 }

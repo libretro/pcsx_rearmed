@@ -79,6 +79,10 @@
 
 #define ISHEXDEC ((buf[cursor] >= '0') && (buf[cursor] <= '9')) || ((buf[cursor] >= 'a') && (buf[cursor] <= 'f')) || ((buf[cursor] >= 'A') && (buf[cursor] <= 'F'))
 
+#ifndef RETRO_ENVIRONMENT_SET_SAVE_STATE_DISABLE_UNDO
+#define RETRO_ENVIRONMENT_SET_SAVE_STATE_DISABLE_UNDO 0x800005
+#endif
+
 //hack to prevent retroarch freezing when reseting in the menu but not while running with the hot key
 static int rebootemu = 0;
 
@@ -604,7 +608,16 @@ static int ctr_get_tlbe(void *ptr)
       return -1;
    return svcCustomBackdoor(ctr_get_tlbe_k, ptr, NULL, NULL);
 }
-#endif
+
+static void ctr_get_mem_info(u32 *used, u32 *aval)
+{
+   *aval = *((volatile u32 *)0x1FF80040);
+   s64 mem_used = 0;
+   if (__ctr_svchax)
+      svcGetSystemInfo(&mem_used, 0, 1);
+   *used = mem_used;
+}
+#endif // _3DS
 
 #ifdef HAVE_LIBNX
 static void *pl_switch_mmap(unsigned long addr, size_t size,
@@ -629,7 +642,7 @@ static void pl_switch_munmap(void *ptr, size_t size, enum psxMapTag tag)
    (void)tag;
    free(ptr);
 }
-#endif
+#endif // HAVE_LIBNX
 
 #ifdef VITA
 typedef struct
@@ -723,21 +736,31 @@ static void pl_vita_munmap(void *ptr, size_t size, enum psxMapTag tag)
 
    free(ptr);
 }
-#endif
+#endif // VITA
 
-static void log_mem_usage(void)
+static void log_mem_usage(int only_if_oom)
 {
 #ifdef _3DS
    extern u32 __heap_size, __linear_heap_size, __stacksize__;
    extern char __end__; // 3dsx.ld
-   u32 app_memory = *((volatile u32 *)0x1FF80040);
-   s64 mem_used = 0;
-   if (__ctr_svchax)
-      svcGetSystemInfo(&mem_used, 0, 1);
+   u32 sp, app_memory = 0;
+   u32 mem_used = 0;
+   void *heap;
+
+   ctr_get_mem_info(&mem_used, &app_memory);
+
+   if (__stacksize__ < 0x100000u || __linear_heap_size < 0xf00000u)
+      LogWarn("past OOM detected, expect instability\n");
+   else if (only_if_oom && mem_used < app_memory - 256*1024u)
+      return;
 
    SysPrintf("mem: %d/%d heap: %d linear: %d/%d stack: %d exe: %d\n",
       (int)mem_used, app_memory, __heap_size, __linear_heap_size - linearSpaceFree(),
       __linear_heap_size, __stacksize__, (int)&__end__ - 0x100000);
+   heap = malloc(4096);
+   asm volatile("mov %0, sp" : "=r"(sp));
+   SysPrintf("current sp: %08x heap: %p\n", sp, heap);
+   free(heap);
 #endif
 }
 
@@ -1291,6 +1314,9 @@ bool retro_serialize(void *data, size_t size)
    int ret;
    CdromFrontendId = disk_current_index;
    ret = SaveState(data);
+
+   // old3ds tends to oom here, so log
+   log_mem_usage(1);
    return ret == 0 ? true : false;
 }
 
@@ -1732,10 +1758,10 @@ static void set_retro_memmap(void)
    uint64_t flags_ram = RETRO_MEMDESC_SYSTEM_RAM;
    struct retro_memory_map retromap = { 0 };
    struct retro_memory_descriptor descs[] = {
-      { flags_ram, psxM, 0, 0x00000000, 0x5fe00000, 0, 0x200000 },
-      { flags_ram, psxH, 0, 0x1f800000, 0x7ffffc00, 0, 0x000400 },
+      { flags_ram, psxRegs.ptrs.psxM, 0, 0x00000000, 0x5fe00000, 0, 0x200000 },
+      { flags_ram, psxRegs.ptrs.psxH, 0, 0x1f800000, 0x7ffffc00, 0, 0x000400 },
       // not ram but let the frontend patch it if it wants; should be last
-      { flags_ram, psxR, 0, 0x1fc00000, 0x5ff80000, 0, 0x080000 },
+      { flags_ram, psxRegs.ptrs.psxR, 0, 0x1fc00000, 0x5ff80000, 0, 0x080000 },
    };
 
    retromap.descriptors = descs;
@@ -2071,7 +2097,16 @@ bool retro_load_game(const struct retro_game_info *info)
 
    set_retro_memmap();
    retro_set_audio_buff_status_cb();
-   log_mem_usage();
+#ifdef _3DS
+   u32 mem_used = 0, mem_avail = 0;
+   ctr_get_mem_info(&mem_used, &mem_avail);
+   // 5 buffers: load undo, save undo, current load/save, backup copy, ram save
+   if (mem_avail - mem_used < 5 * retro_serialize_size() * 11 / 10) {
+      bool true_ = true;
+      environ_cb(RETRO_ENVIRONMENT_SET_SAVE_STATE_DISABLE_UNDO, &true_);
+   }
+#endif
+   log_mem_usage(0);
 
    if (check_unsatisfied_libcrypt())
       show_notification("LibCrypt protected game with missing SBI detected", 3000, 3);
@@ -2091,7 +2126,7 @@ void *retro_get_memory_data(unsigned id)
    if (id == RETRO_MEMORY_SAVE_RAM)
       return Mcd1Data;
    else if (id == RETRO_MEMORY_SYSTEM_RAM)
-      return psxM;
+      return psxRegs.ptrs.psxM;
    else
       return NULL;
 }
@@ -3644,7 +3679,7 @@ void retro_init(void)
    struct retro_rumble_interface rumble;
    int ret;
 
-   log_mem_usage();
+   log_mem_usage(0);
 
    msg_interface_version = 0;
    environ_cb(RETRO_ENVIRONMENT_GET_MESSAGE_INTERFACE_VERSION, &msg_interface_version);
@@ -3684,7 +3719,7 @@ void retro_init(void)
    // alloc enough for RETRO_PIXEL_FORMAT_XRGB8888
    size_t vout_buf_size = VOUT_MAX_WIDTH * VOUT_MAX_HEIGHT * 4;
 #ifdef _3DS
-   // Place psx vram in linear mem to take advantage of it's supersection mapping.
+   // Place psx vram in linear mem to take advantage of its supersection mapping.
    // The emu allocs 2x (0x201000 to be exact) but doesn't really need that much,
    // so place vout_buf below to also act as an overdraw guard.
    vram_mem = linearMemAlign(1024*1024 + 4096 + vout_buf_size, 4096);

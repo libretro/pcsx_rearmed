@@ -12,7 +12,7 @@ ifneq ($(DEBUG)$(DEBUG_SYMS), 00)
 CFLAGS += -ggdb
 endif
 ifneq ($(DEBUG), 1)
-CFLAGS += -O3
+CFLAGS += -Ofast
 ifneq ($(ASSERTS), 1)
 CFLAGS += -DNDEBUG
 endif
@@ -197,6 +197,7 @@ endif
 else ifeq "$(DYNAREC)" "ari64"
 OBJS += libpcsxcore/new_dynarec/new_dynarec.o
 OBJS += libpcsxcore/new_dynarec/pcsxmem.o
+libpcsxcore/new_dynarec/new_dynarec.o: CFLAGS += -O2 # less bloat
  ifeq "$(ARCH)" "arm"
  OBJS += libpcsxcore/new_dynarec/linkage_arm.o
  else ifneq (,$(findstring $(ARCH),aarch64 arm64))

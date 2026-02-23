@@ -60,23 +60,27 @@ void ndrc_freeze(void *f, int mode)
 		SaveFuncs.write(f, addrs, size);
 	}
 	else {
-		bytes = SaveFuncs.read(f, header, sizeof(header));
-		if (bytes != sizeof(header) || strcmp(header, header_save)) {
-			if (bytes > 0)
-				SaveFuncs.seek(f, -bytes, SEEK_CUR);
-			return;
-		}
-		SaveFuncs.read(f, &size, sizeof(size));
-		if (size <= 0)
-			return;
-		if (size > sizeof(addrs)) {
-			bytes = size - sizeof(addrs);
-			SaveFuncs.seek(f, bytes, SEEK_CUR);
-			size = sizeof(addrs);
-		}
-		bytes = SaveFuncs.read(f, addrs, size);
-		if (bytes != size)
-			return;
+		do {
+			bytes = SaveFuncs.read(f, header, sizeof(header));
+			if (bytes != sizeof(header) || strcmp(header, header_save)) {
+				if (bytes > 0)
+					SaveFuncs.seek(f, -bytes, SEEK_CUR);
+				break;
+			}
+			SaveFuncs.read(f, &size, sizeof(size));
+			if (size <= 0) {
+				size = 0;
+				break;
+			}
+			if (size > sizeof(addrs)) {
+				bytes = size - sizeof(addrs);
+				SaveFuncs.seek(f, bytes, SEEK_CUR);
+				size = sizeof(addrs);
+			}
+			bytes = SaveFuncs.read(f, addrs, size);
+			if (bytes != size)
+				size = 0;
+		} while (0);
 
 		if (psxCpu != &psxInt)
 			new_dynarec_load_blocks(addrs, size);
@@ -289,6 +293,9 @@ static void ari64_notify(enum R3000Anote note, void *data) {
 		break;
 	case R3000ACPU_NOTIFY_AFTER_LOAD:
 		ari64_on_ext_change(data == NULL, 0);
+		// fallthrough
+	// for state load, we take no action to not duplicate ndrc_freeze() work
+	case R3000ACPU_NOTIFY_AFTER_LOAD_STATE:
 		psxInt.Notify(note, data);
 		break;
 	}
@@ -616,7 +623,7 @@ static int ari64_init()
 #ifdef DRC_DBG
 	memcpy(gte_handlers_nf, gte_handlers, sizeof(gte_handlers_nf));
 #endif
-	psxH_ptr = psxH;
+	psxH_ptr = psxRegs.ptrs.psxH;
 	zeromem_ptr = zero_mem;
 	scratch_buf_ptr = scratch_buf; // for gte_neon.S
 

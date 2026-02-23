@@ -26,6 +26,12 @@ extern "C" {
 
 #include "psxcommon.h"
 
+#ifdef __i386__
+#define INT_ATTR __attribute__((regparm(2)))
+#else
+#define INT_ATTR
+#endif
+
 enum R3000Aexception {
 	R3000E_Int = 0,      // Interrupt
 	R3000E_AdEL = 4,     // Address error (on load/I-fetch)
@@ -42,8 +48,10 @@ enum R3000Aexception {
 enum R3000Anote {
 	R3000ACPU_NOTIFY_CACHE_ISOLATED = 0,
 	R3000ACPU_NOTIFY_CACHE_UNISOLATED = 1,
+	// this is to sync any cached cpu core state with one in psxRegs
 	R3000ACPU_NOTIFY_BEFORE_SAVE,  // data arg - hle if non-null
-	R3000ACPU_NOTIFY_AFTER_LOAD,
+	R3000ACPU_NOTIFY_AFTER_LOAD,   // data arg - full ram if null
+	R3000ACPU_NOTIFY_AFTER_LOAD_STATE, // same, but only after savestate load
 };
 
 enum blockExecCaller {
@@ -217,9 +225,20 @@ typedef struct psxRegisters {
 	u32 biosBranchCheck;
 	u32 cpuInRecursion;
 	u32 gpuIdleAfter;
-	u32 unused3[2];
 	// warning: changing anything in psxRegisters requires update of all
 	// asm in libpcsxcore/new_dynarec/ and may break savestates
+	// ptrs must be last
+	struct {
+		u8 *psxM; // Kernel & User Memory (2 Meg)
+		u8 *psxP; // Parallel/Expansion Port (64K) (not used)
+		u8 *psxR; // BIOS ROM (512K)
+		u8 *psxH; // Scratch Pad (1K) & Hardware Registers (8K)
+		uintptr_t *memRLUT;
+		uintptr_t *memWLUT;
+		u32 (INT_ATTR *intFetch)(struct psxRegisters *regs_,
+					 const uintptr_t *memRLUT, u32 pc);
+		void *unused3[3];
+	} ptrs;
 } psxRegisters;
 
 extern psxRegisters psxRegs;

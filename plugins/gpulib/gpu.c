@@ -1061,7 +1061,7 @@ uint32_t GPUreadStatus(void)
   return ret;
 }
 
-long GPUfreeze(uint32_t type, GPUFreeze_t *freeze)
+long GPUfreeze(uint32_t type, GPUFreeze_t *freeze, uint16_t **vram_ptr)
 {
   int i;
 
@@ -1073,14 +1073,12 @@ long GPUfreeze(uint32_t type, GPUFreeze_t *freeze)
       }
 
       sync_renderer(&gpu);
-      memcpy(freeze->psxVRam, gpu.vram, 1024 * 512 * 2);
       memcpy(freeze->ulControl, gpu.regs, sizeof(gpu.regs));
       memcpy(freeze->ulControl + 0xe0, gpu.ex_regs, sizeof(gpu.ex_regs));
       freeze->ulStatus = gpu.status;
       break;
     case 0: // load
       sync_renderer(&gpu);
-      memcpy(gpu.vram, freeze->psxVRam, 1024 * 512 * 2);
       //memcpy(gpu.regs, freeze->ulControl, sizeof(gpu.regs));
       memcpy(gpu.ex_regs, freeze->ulControl + 0xe0, sizeof(gpu.ex_regs));
       gpu.status = freeze->ulStatus;
@@ -1093,6 +1091,7 @@ long GPUfreeze(uint32_t type, GPUFreeze_t *freeze)
       break;
   }
 
+  *vram_ptr = gpu.vram;
   return 1;
 }
 

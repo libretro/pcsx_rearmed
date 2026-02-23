@@ -362,9 +362,9 @@ static struct lightrec_mem_map lightrec_map[] = {
 static void lightrec_enable_ram(struct lightrec_state *state, bool enable)
 {
 	if (enable)
-		memcpy(psxM, cache_buf, sizeof(cache_buf));
+		memcpy(psxRegs.ptrs.psxM, cache_buf, sizeof(cache_buf));
 	else
-		memcpy(cache_buf, psxM, sizeof(cache_buf));
+		memcpy(cache_buf, psxRegs.ptrs.psxM, sizeof(cache_buf));
 
 	ram_disabled = !enable;
 }
@@ -462,11 +462,11 @@ static const struct lightrec_ops lightrec_ops = {
 
 static int lightrec_plugin_init(void)
 {
-	lightrec_map[PSX_MAP_KERNEL_USER_RAM].address = psxM;
-	lightrec_map[PSX_MAP_BIOS].address = psxR;
-	lightrec_map[PSX_MAP_SCRATCH_PAD].address = psxH;
-	lightrec_map[PSX_MAP_HW_REGISTERS].address = psxH + 0x1000;
-	lightrec_map[PSX_MAP_PARALLEL_PORT].address = psxP;
+	lightrec_map[PSX_MAP_KERNEL_USER_RAM].address = psxRegs.ptrs.psxM;
+	lightrec_map[PSX_MAP_BIOS].address = psxRegs.ptrs.psxR;
+	lightrec_map[PSX_MAP_SCRATCH_PAD].address = psxRegs.ptrs.psxH;
+	lightrec_map[PSX_MAP_HW_REGISTERS].address = psxRegs.ptrs.psxH + 0x1000;
+	lightrec_map[PSX_MAP_PARALLEL_PORT].address = psxRegs.ptrs.psxP;
 
 	if (!LIGHTREC_CUSTOM_MAP) {
 #if P_HAVE_MMAP
@@ -483,9 +483,9 @@ static int lightrec_plugin_init(void)
 	}
 
 	if (LIGHTREC_CUSTOM_MAP) {
-		lightrec_map[PSX_MAP_MIRROR1].address = psxM + 0x200000;
-		lightrec_map[PSX_MAP_MIRROR2].address = psxM + 0x400000;
-		lightrec_map[PSX_MAP_MIRROR3].address = psxM + 0x600000;
+		lightrec_map[PSX_MAP_MIRROR1].address = psxRegs.ptrs.psxM + 0x200000;
+		lightrec_map[PSX_MAP_MIRROR2].address = psxRegs.ptrs.psxM + 0x400000;
+		lightrec_map[PSX_MAP_MIRROR3].address = psxRegs.ptrs.psxM + 0x600000;
 	}
 
 	lightrec_map[PSX_MAP_CODE_BUFFER].address = code_buffer;
@@ -507,10 +507,10 @@ static int lightrec_plugin_init(void)
 			&lightrec_ops);
 
 	// fprintf(stderr, "M=0x%lx, P=0x%lx, R=0x%lx, H=0x%lx\n",
-	// 		(uintptr_t) psxM,
-	// 		(uintptr_t) psxP,
-	// 		(uintptr_t) psxR,
-	// 		(uintptr_t) psxH);
+	// 		(uintptr_t) psxRegs.ptrs.psxM,
+	// 		(uintptr_t) psxRegs.ptrs.psxP,
+	// 		(uintptr_t) psxRegs.ptrs.psxR,
+	// 		(uintptr_t) psxRegs.ptrs.psxH);
 
 #ifndef _WIN32
 	signal(SIGPIPE, exit);
@@ -587,9 +587,9 @@ static void print_for_big_ass_debugger(void)
 
 	if (lightrec_very_debug)
 		printf(" RAM 0x%08x SCRATCH 0x%08x HW 0x%08x",
-				hash_calculate_ram(psxM, 0x200000),
-				hash_calculate_le(psxH, 0x400),
-				hash_calculate_le(psxH + 0x1000, 0x2000));
+				hash_calculate_ram(psxRegs.ptrs.psxM, 0x200000),
+				hash_calculate_le(psxRegs.ptrs.psxH, 0x400),
+				hash_calculate_le(psxRegs.ptrs.psxH + 0x1000, 0x2000));
 
 	printf(" CP0 0x%08x CP2D 0x%08x CP2C 0x%08x INT 0x%04x INTCYCLE 0x%08x GPU 0x%08x",
 			hash_calculate(regs->cp0, sizeof(regs->cp0)),
@@ -727,6 +727,7 @@ static void lightrec_plugin_notify(enum R3000Anote note, void *data)
 		lightrec_plugin_sync_regs_to_pcsx(data == NULL);
 		break;
 	case R3000ACPU_NOTIFY_AFTER_LOAD:
+	case R3000ACPU_NOTIFY_AFTER_LOAD_STATE:
 		lightrec_plugin_sync_regs_from_pcsx(data == NULL);
 		if (data == NULL)
 			lightrec_invalidate_all(lightrec_state);

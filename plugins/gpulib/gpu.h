@@ -193,7 +193,7 @@ void GPUreadDataMem(uint32_t *mem, int count);
 uint32_t GPUreadData(void);
 uint32_t GPUreadStatus(void);
 void GPUwriteStatus(uint32_t data);
-long GPUfreeze(uint32_t type, struct GPUFreeze *freeze);
+long GPUfreeze(uint32_t type, struct GPUFreeze *freeze, uint16_t **vram_ptr);
 void GPUupdateLace(void);
 long GPUopen(unsigned long *disp, char *cap, char *cfg);
 long GPUclose(void);

@@ -25,6 +25,7 @@ extern "C" {
 #endif
 
 #include "psxcommon.h"
+#include "r3000a.h"
 
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
 
@@ -46,87 +47,53 @@ extern "C" {
 
 #endif
 
+// this is needed because:
+// - lighrec sometimes maps ram at address 0
+// - memRLUT[] may contain 0 as a valid entry
+#define INVALID_PTR_VAL -1l
 #ifdef LIGHTREC
-#define INVALID_PTR ((void *)-1)
+#define INVALID_PTR ((void *)INVALID_PTR_VAL)
 #else
 #define INVALID_PTR NULL
 #endif
 
-extern s8 *psxM;
-#define psxMs8(mem)		psxM[(mem) & 0x1fffff]
-#define psxMs16(mem)	(SWAP16(*(s16 *)&psxM[(mem) & 0x1fffff]))
-#define psxMs32(mem)	(SWAP32(*(s32 *)&psxM[(mem) & 0x1fffff]))
-#define psxMu8(mem)		(*(u8 *)&psxM[(mem) & 0x1fffff])
-#define psxMu16(mem)	(SWAP16(*(u16 *)&psxM[(mem) & 0x1fffff]))
-#define psxMu32(mem)	(SWAP32(*(u32 *)&psxM[(mem) & 0x1fffff]))
+#define PSXM_SHIFT 19
 
-#define psxMs8ref(mem)	psxM[(mem) & 0x1fffff]
-#define psxMs16ref(mem)	(*(s16 *)&psxM[(mem) & 0x1fffff])
-#define psxMs32ref(mem)	(*(s32 *)&psxM[(mem) & 0x1fffff])
-#define psxMu8ref(mem)	(*(u8 *)&psxM[(mem) & 0x1fffff])
-#define psxMu16ref(mem)	(*(u16 *)&psxM[(mem) & 0x1fffff])
-#define psxMu32ref(mem)	(*(u32 *)&psxM[(mem) & 0x1fffff])
+#define psxMu8(mem)		(*(u8 *)&psxRegs.ptrs.psxM[(mem) & 0x1fffff])
+#define psxMu16(mem)	(SWAP16(*(u16 *)&psxRegs.ptrs.psxM[(mem) & 0x1fffff]))
+#define psxMu32(mem)	(SWAP32(*(u32 *)&psxRegs.ptrs.psxM[(mem) & 0x1fffff]))
 
-extern s8 *psxP;
-#define psxPs8(mem)	    psxP[(mem) & 0xffff]
-#define psxPs16(mem)	(SWAP16(*(s16 *)&psxP[(mem) & 0xffff]))
-#define psxPs32(mem)	(SWAP32(*(s32 *)&psxP[(mem) & 0xffff]))
-#define psxPu8(mem)		(*(u8 *)&psxP[(mem) & 0xffff])
-#define psxPu16(mem)	(SWAP16(*(u16 *)&psxP[(mem) & 0xffff]))
-#define psxPu32(mem)	(SWAP32(*(u32 *)&psxP[(mem) & 0xffff]))
+#define psxMu8ref(mem)	(*(u8  *)&psxRegs.ptrs.psxM[(mem) & 0x1fffff])
+#define psxMu16ref(mem)	(*(u16 *)&psxRegs.ptrs.psxM[(mem) & 0x1fffff])
+#define psxMu32ref(mem)	(*(u32 *)&psxRegs.ptrs.psxM[(mem) & 0x1fffff])
 
-#define psxPs8ref(mem)	psxP[(mem) & 0xffff]
-#define psxPs16ref(mem)	(*(s16 *)&psxP[(mem) & 0xffff])
-#define psxPs32ref(mem)	(*(s32 *)&psxP[(mem) & 0xffff])
-#define psxPu8ref(mem)	(*(u8 *)&psxP[(mem) & 0xffff])
-#define psxPu16ref(mem)	(*(u16 *)&psxP[(mem) & 0xffff])
-#define psxPu32ref(mem)	(*(u32 *)&psxP[(mem) & 0xffff])
+#define psxHu8(mem)		(*(u8 *)&psxRegs.ptrs.psxH[(mem) & 0xffff])
+#define psxHu16(mem)	(SWAP16(*(u16 *)&psxRegs.ptrs.psxH[(mem) & 0xffff]))
+#define psxHu32(mem)	(SWAP32(*(u32 *)&psxRegs.ptrs.psxH[(mem) & 0xffff]))
 
-extern s8 *psxR;
-#define psxRs8(mem)		psxR[(mem) & 0x7ffff]
-#define psxRs16(mem)	(SWAP16(*(s16 *)&psxR[(mem) & 0x7ffff]))
-#define psxRs32(mem)	(SWAP32(*(s32 *)&psxR[(mem) & 0x7ffff]))
-#define psxRu8(mem)		(*(u8* )&psxR[(mem) & 0x7ffff])
-#define psxRu16(mem)	(SWAP16(*(u16 *)&psxR[(mem) & 0x7ffff]))
-#define psxRu32(mem)	(SWAP32(*(u32 *)&psxR[(mem) & 0x7ffff]))
+#define psxHu8ref(mem)	(*(u8  *)&psxRegs.ptrs.psxH[(mem) & 0xffff])
+#define psxHu16ref(mem)	(*(u16 *)&psxRegs.ptrs.psxH[(mem) & 0xffff])
+#define psxHu32ref(mem)	(*(u32 *)&psxRegs.ptrs.psxH[(mem) & 0xffff])
 
-#define psxRs8ref(mem)	psxR[(mem) & 0x7ffff]
-#define psxRs16ref(mem)	(*(s16*)&psxR[(mem) & 0x7ffff])
-#define psxRs32ref(mem)	(*(s32*)&psxR[(mem) & 0x7ffff])
-#define psxRu8ref(mem)	(*(u8 *)&psxR[(mem) & 0x7ffff])
-#define psxRu16ref(mem)	(*(u16*)&psxR[(mem) & 0x7ffff])
-#define psxRu32ref(mem)	(*(u32*)&psxR[(mem) & 0x7ffff])
-
-extern s8 *psxH;
-#define psxHs8(mem)		psxH[(mem) & 0xffff]
-#define psxHs16(mem)	(SWAP16(*(s16 *)&psxH[(mem) & 0xffff]))
-#define psxHs32(mem)	(SWAP32(*(s32 *)&psxH[(mem) & 0xffff]))
-#define psxHu8(mem)		(*(u8 *)&psxH[(mem) & 0xffff])
-#define psxHu16(mem)	(SWAP16(*(u16 *)&psxH[(mem) & 0xffff]))
-#define psxHu32(mem)	(SWAP32(*(u32 *)&psxH[(mem) & 0xffff]))
-
-#define psxHs8ref(mem)	psxH[(mem) & 0xffff]
-#define psxHs16ref(mem)	(*(s16 *)&psxH[(mem) & 0xffff])
-#define psxHs32ref(mem)	(*(s32 *)&psxH[(mem) & 0xffff])
-#define psxHu8ref(mem)	(*(u8 *)&psxH[(mem) & 0xffff])
-#define psxHu16ref(mem)	(*(u16 *)&psxH[(mem) & 0xffff])
-#define psxHu32ref(mem)	(*(u32 *)&psxH[(mem) & 0xffff])
-
-extern u8 **psxMemWLUT;
-extern u8 **psxMemRLUT;
 extern int cache_isolated;
 
 #ifndef DISABLE_MEM_LUTS
 #define DISABLE_MEM_LUTS 0
 #endif
 
-static inline void * psxm_lut(u32 mem, int write, u8 **lut)
+// it may seem returning the pointer would be convenient here,
+// but that causes double compare (after lut and after ptr arithmetic),
+// and this is a hot path for the interpreter and non-dynarec-allowing systems, like apple
+static inline int psxm_lut(u8 **ret, const psxRegisters *regs, u32 mem, int write,
+	const uintptr_t *lut)
 {
 	if (!DISABLE_MEM_LUTS) {
-		void *ptr = lut[mem >> 16];
-
-		return ptr == INVALID_PTR ? INVALID_PTR
-			: (void *)((uintptr_t)ptr + (u16)mem);
+		uintptr_t ptr = lut[mem >> PSXM_SHIFT];
+		if (ptr != INVALID_PTR_VAL) {
+			*ret = (u8 *)(ptr + mem);
+			return 1;
+		}
+		return 0;
 	}
 
 	if (mem >= 0xa0000000)
@@ -134,54 +101,56 @@ static inline void * psxm_lut(u32 mem, int write, u8 **lut)
 	else
 		mem &= ~0x80000000;
 
-	if (mem < 0x800000) {
-		if (cache_isolated)
-			return INVALID_PTR;
+	if (mem < 0x800000u) {
+		if (write && cache_isolated)
+			return 0;
 
-		return &psxM[mem & 0x1fffff];
+		*ret = regs->ptrs.psxM + (mem & 0x1fffff);
+		return 1;
 	}
 
-	if (mem > 0x1f800000 && mem <= 0x1f810000)
-		return &psxH[mem - 0x1f800000];
-
-	if (!write) {
-		if (mem > 0x1fc00000 && mem <= 0x1fc80000)
-			return &psxR[mem - 0x1fc00000];
-
-		if (mem > 0x1f000000 && mem <= 0x1f010000)
-			return &psxP[mem - 0x1f000000];
+	if (!write && mem - 0x1fc00000u < 0x80000u) {
+		*ret = regs->ptrs.psxR + (mem - 0x1fc00000u);
+		return 1;
 	}
 
-	return INVALID_PTR;
+	return 0;
+}
+
+static inline int psxm_(u8 **ret, const psxRegisters *regs, u32 mem, int write)
+{
+	return psxm_lut(ret, regs, mem, write,
+		write ? regs->ptrs.memWLUT : regs->ptrs.memRLUT);
 }
 
 static inline void * psxm(u32 mem, int write)
 {
-	return psxm_lut(mem, write, write ? psxMemWLUT : psxMemRLUT);
+	u8 *ret;
+	if (psxm_(&ret, &psxRegs, mem, write))
+		return ret;
+	return INVALID_PTR;
 }
 
 #define PSXM(mem) psxm(mem, 0)
-#define PSXMs8(mem)		(*(s8 *)PSXM(mem))
-#define PSXMs16(mem)	(SWAP16(*(s16 *)PSXM(mem)))
-#define PSXMs32(mem)	(SWAP32(*(s32 *)PSXM(mem)))
 #define PSXMu8(mem)		(*(u8 *)PSXM(mem))
 #define PSXMu16(mem)	(SWAP16(*(u16 *)PSXM(mem)))
 #define PSXMu32(mem)	(SWAP32(*(u32 *)PSXM(mem)))
 
 #define PSXMu32ref(mem)	(*(u32 *)PSXM(mem))
 
+struct psxRegisters;
+
 int psxMemInit();
 void psxMemReset();
 void psxMemOnIsolate(int enable);
 void psxMemShutdown();
 
-u8 psxMemRead8 (u32 mem);
-u16 psxMemRead16(u32 mem);
-u32 psxMemRead32(u32 mem);
-void psxMemWrite8 (u32 mem, u32 value);
-void psxMemWrite16(u32 mem, u32 value);
-void psxMemWrite32(u32 mem, u32 value);
-void *psxMemPointer(u32 mem);
+u8  psxMemRead8 (struct psxRegisters *regs, u32 mem);
+u16 psxMemRead16(struct psxRegisters *regs, u32 mem);
+u32 psxMemRead32(struct psxRegisters *regs, u32 mem);
+void psxMemWrite8 (struct psxRegisters *regs, u32 mem, u32 value);
+void psxMemWrite16(struct psxRegisters *regs, u32 mem, u32 value);
+void psxMemWrite32(struct psxRegisters *regs, u32 mem, u32 value);
 
 #ifdef __cplusplus
 }

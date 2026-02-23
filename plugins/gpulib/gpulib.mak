@@ -16,9 +16,6 @@ endif
 
 GPULIB_A = ../gpulib/gpulib.$(ARCH).a
 
-ifdef BIN_STANDALONE
-TARGETS += $(BIN_STANDALONE)
-endif
 ifdef BIN_GPULIB
 TARGETS += $(BIN_GPULIB)
 endif
@@ -29,15 +26,6 @@ WD = $(shell pwd)
 PLUGINDIR = $(shell basename $(WD))
 
 all: ../../config.mak $(TARGETS)
-
-ifdef BIN_STANDALONE
-ifneq ($(findstring .cpp,$(SRC_STANDALONE)),)
-CC_STANDLALONE = $(CXX)
-endif
-$(BIN_STANDALONE): $(SRC) $(SRC_STANDALONE) $(GPULIB_A)
-	$(CC_STANDLALONE) -o $@ $(CFLAGS) $(LDFLAGS) $^ $(LDLIBS) $(LDLIBS_STANDALONE)
-	ln -fs $(PLUGINDIR)/$@ ../
-endif
 
 ifdef BIN_GPULIB
 ifneq ($(findstring .cpp,$(SRC_GPULIB)),)

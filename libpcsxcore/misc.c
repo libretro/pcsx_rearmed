@@ -703,14 +703,19 @@ struct misc_save_data {
 #define EX_SCREENPIC_SIZE (128 * 96 * 3)
 
 int SaveState(const char *file) {
-	struct misc_save_data *misc = (void *)(psxH + 0xf000);
+	struct misc_save_data *misc = (void *)(psxRegs.ptrs.psxH + 0xf000);
 	struct origin_info oi = { 0, };
-	GPUFreeze_t *gpufP = NULL;
-	SPUFreezeHdr_t spufH;
-	SPUFreeze_t *spufP = NULL;
-	u8 buf[EX_SCREENPIC_SIZE];
-	int result = -1;
-	int Size;
+	union {
+		// save stack space
+		u8 buf[EX_SCREENPIC_SIZE];
+		GPUFreeze_t gpu_hdr;
+		struct {
+			SPUFreeze_t spu_hdr;
+			u8 spu_part2[SPUFREEZE_F2_MAX_SIZE];
+		};
+	} u;
+	unsigned short *spuram = NULL;
+	uint16_t *vram = NULL;
 	void *f;
 
 	assert(!psxRegs.branching);
@@ -748,38 +753,37 @@ int SaveState(const char *file) {
 	snprintf(oi.build_info, sizeof(oi.build_info), "%s", get_build_info());
 
 	// this was space for ScreenPic
-	assert(sizeof(buf) >= EX_SCREENPIC_SIZE);
 	assert(sizeof(oi) - 3 <= EX_SCREENPIC_SIZE);
-	memset(buf, 0, sizeof(buf));
-	memcpy(buf + 3, &oi, sizeof(oi));
-	SaveFuncs.write(f, buf, EX_SCREENPIC_SIZE);
+	memset(u.buf, 0, sizeof(u.buf));
+	memcpy(u.buf + 3, &oi, sizeof(oi));
+	SaveFuncs.write(f, u.buf, sizeof(u.buf));
 
 	if (Config.HLE)
 		psxBiosFreeze(1);
 
-	SaveFuncs.write(f, psxM, 0x00200000);
-	SaveFuncs.write(f, psxR, 0x00080000);
-	SaveFuncs.write(f, psxH, 0x00010000);
+	SaveFuncs.write(f, psxRegs.ptrs.psxM, 0x00200000);
+	SaveFuncs.write(f, psxRegs.ptrs.psxR, 0x00080000);
+	SaveFuncs.write(f, psxRegs.ptrs.psxH, 0x00010000);
 	// only partial save of psxRegisters to maintain savestate compat
 	SaveFuncs.write(f, &psxRegs, offsetof(psxRegisters, gteBusyCycle));
 
 	// gpu
-	gpufP = (GPUFreeze_t *)malloc(sizeof(GPUFreeze_t));
-	if (gpufP == NULL) goto cleanup;
-	gpufP->ulFreezeVersion = 1;
-	memset(gpufP->ulControl, 0, sizeof(gpufP->ulControl));
-	GPU_freeze(1, gpufP);
-	SaveFuncs.write(f, gpufP, sizeof(GPUFreeze_t));
-	free(gpufP); gpufP = NULL;
+	u.gpu_hdr.ulFreezeVersion = 1;
+	u.gpu_hdr.ulStatus = 0;
+	memset(u.gpu_hdr.ulControl, 0, sizeof(u.gpu_hdr.ulControl));
+	GPU_freeze(1, &u.gpu_hdr, &vram);
+	SaveFuncs.write(f, &u.gpu_hdr, sizeof(u.gpu_hdr));
+	SaveFuncs.write(f, vram, 1024*512*2);
 
 	// spu
-	SPU_freeze(2, (SPUFreeze_t *)&spufH, psxRegs.cycle);
-	Size = spufH.Size; SaveFuncs.write(f, &Size, 4);
-	spufP = (SPUFreeze_t *) malloc(Size);
-	if (spufP == NULL) goto cleanup;
-	SPU_freeze(1, spufP, psxRegs.cycle);
-	SaveFuncs.write(f, spufP, Size);
-	free(spufP); spufP = NULL;
+	SPU_freeze(1, &u.spu_hdr, &spuram, u.spu_part2, psxRegs.cycle);
+	assert(u.spu_hdr.Size > sizeof(u.spu_hdr) + 512*1024);
+	assert(u.spu_hdr.Size <= sizeof(u.spu_hdr) + 512*1024 + sizeof(u.spu_part2));
+	assert(spuram);
+	SaveFuncs.write(f, &u.spu_hdr.Size, 4); // redundant, for compat
+	SaveFuncs.write(f, &u.spu_hdr, sizeof(u.spu_hdr));
+	SaveFuncs.write(f, spuram, 512*1024);
+	SaveFuncs.write(f, &u.spu_part2, u.spu_hdr.Size - sizeof(u.spu_hdr) - 512*1024);
 
 	sioFreeze(f, 1);
 	cdrFreeze(f, 1);
@@ -789,24 +793,30 @@ int SaveState(const char *file) {
 	ndrc_freeze(f, 1);
 	padFreeze(f, 1);
 
-	result = 0;
-cleanup:
 	memset(misc, 0, sizeof(*misc));
 	SaveFuncs.close(f);
-	return result;
+	return 0;
 }
 
 int LoadState(const char *file) {
-	struct misc_save_data *misc = (void *)(psxH + 0xf000);
+	struct misc_save_data *misc = (void *)(psxRegs.ptrs.psxH + 0xf000);
 	u32 biosBranchCheckOld = psxRegs.biosBranchCheck;
-	void *f;
-	GPUFreeze_t *gpufP = NULL;
-	SPUFreeze_t *spufP = NULL;
+	union {
+		// save stack space
+		GPUFreeze_t gpu_hdr;
+		struct {
+			SPUFreeze_t spu_hdr;
+			u8 spu_part2[SPUFREEZE_F2_MAX_SIZE];
+		};
+	} u;
+	unsigned short *spuram = NULL;
+	uint16_t *vram = NULL;
 	boolean hle, oldhle;
 	int Size;
 	char header[32];
 	u32 version;
 	int result = -1;
+	void *f;
 
 	f = SaveFuncs.open(file, "rb");
 	if (f == NULL) return -1;
@@ -841,9 +851,9 @@ int LoadState(const char *file) {
 	// ex-ScreenPic space
 	SaveFuncs.seek(f, EX_SCREENPIC_SIZE, SEEK_CUR);
 
-	SaveFuncs.read(f, psxM, 0x00200000);
-	SaveFuncs.read(f, psxR, 0x00080000);
-	SaveFuncs.read(f, psxH, 0x00010000);
+	SaveFuncs.read(f, psxRegs.ptrs.psxM, 0x00200000);
+	SaveFuncs.read(f, psxRegs.ptrs.psxR, 0x00080000);
+	SaveFuncs.read(f, psxRegs.ptrs.psxH, 0x00010000);
 	SaveFuncs.read(f, &psxRegs, offsetof(psxRegisters, gteBusyCycle));
 	psxRegs.gteBusyCycle = psxRegs.cycle;
 	psxRegs.branching = 0;
@@ -868,20 +878,29 @@ int LoadState(const char *file) {
 		psxBiosFreeze(0);
 
 	// gpu
-	gpufP = (GPUFreeze_t *)malloc(sizeof(GPUFreeze_t));
-	if (gpufP == NULL) goto cleanup;
-	SaveFuncs.read(f, gpufP, sizeof(GPUFreeze_t));
-	GPU_freeze(0, gpufP);
-	free(gpufP);
+	SaveFuncs.read(f, &u.gpu_hdr, sizeof(u.gpu_hdr));
+	GPU_freeze(0, &u.gpu_hdr, &vram);
+	assert(vram);
+	SaveFuncs.read(f, vram, 1024*512*2);
 	gpuSyncPluginSR();
 
 	// spu
 	SaveFuncs.read(f, &Size, 4);
-	spufP = (SPUFreeze_t *)malloc(Size);
-	if (spufP == NULL) goto cleanup;
-	SaveFuncs.read(f, spufP, Size);
-	SPU_freeze(0, spufP, psxRegs.cycle);
-	free(spufP);
+	if (sizeof(u.spu_hdr) + 512*1024 < Size &&
+	    (uint32_t)Size <= sizeof(u.spu_hdr) + 512*1024u + sizeof(u.spu_part2))
+	{
+		SPU_freeze(0, NULL, &spuram, NULL, psxRegs.cycle);
+		assert(spuram);
+		SaveFuncs.read(f, &u.spu_hdr, sizeof(u.spu_hdr));
+		SaveFuncs.read(f, spuram, 512*1024);
+		SaveFuncs.read(f, &u.spu_part2, Size - sizeof(u.spu_hdr) - 512*1024);
+		SPU_freeze(0, &u.spu_hdr, &spuram, u.spu_part2, psxRegs.cycle);
+	}
+	else
+	{
+		SysPrintf("broken spu save size %d, attempting to skip\n", Size);
+		SaveFuncs.seek(f, Size, SEEK_CUR);
+	}
 
 	sioFreeze(f, 0);
 	cdrFreeze(f, 0);
@@ -901,7 +920,7 @@ int LoadState(const char *file) {
 	if (Config.HLE)
 		psxBiosCheckExe(biosBranchCheckOld, 0x60, 1);
 
-	psxCpu->Notify(R3000ACPU_NOTIFY_AFTER_LOAD, NULL);
+	psxCpu->Notify(R3000ACPU_NOTIFY_AFTER_LOAD_STATE, NULL);
 
 	result = 0;
 cleanup:

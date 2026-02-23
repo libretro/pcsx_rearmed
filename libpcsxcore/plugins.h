@@ -59,7 +59,7 @@ typedef uint32_t (CALLBACK* GPUreadData)(void);
 typedef void (CALLBACK* GPUreadDataMem)(uint32_t *, int);
 typedef long (CALLBACK* GPUdmaChain)(uint32_t *, uint32_t, uint32_t *, int32_t *);
 typedef void (CALLBACK* GPUupdateLace)(void);
-typedef long (CALLBACK* GPUfreeze)(uint32_t, GPUFreeze_t *);
+typedef long (CALLBACK* GPUfreeze)(uint32_t, GPUFreeze_t *, uint16_t **);
 typedef void (CALLBACK* GPUvBlank)(int, int);
 typedef void (CALLBACK* GPUgetScreenInfo)(int *, int *);
 
@@ -100,7 +100,8 @@ typedef void (CALLBACK* SPUreadDMAMem)(unsigned short *, int, unsigned int);
 typedef void (CALLBACK* SPUplayADPCMchannel)(xa_decode_t *, unsigned int, int);
 typedef void (CALLBACK* SPUregisterCallback)(void (CALLBACK *callback)(int));
 typedef void (CALLBACK* SPUregisterScheduleCb)(void (CALLBACK *callback)(unsigned int cycles_after));
-typedef long (CALLBACK* SPUfreeze)(unsigned int, struct SPUFreeze *, unsigned int);
+typedef long (CALLBACK* SPUfreeze)(int ulFreezeMode, SPUFreeze_t * pF,
+		unsigned short **ram, void * pF2, unsigned int cycles);
 typedef void (CALLBACK* SPUasync)(unsigned int, unsigned int);
 typedef int  (CALLBACK* SPUplayCDDAchannel)(short *, int, unsigned int, int);
 typedef void (CALLBACK* SPUsetCDvol)(unsigned char, unsigned char, unsigned char, unsigned char, unsigned int);
