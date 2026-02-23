@@ -162,6 +162,8 @@ cycle_multiplier_overrides[] =
 	/* Legend of Legaia - some attack moves lag and cause a/v desync */
 	{ 160, { "SCUS94254", "SCUS94366", "SCES01752" } },
 	{ 160, { "SCES01944", "SCES01945", "SCES01946", "SCES01947" } },
+	/* Tunguska: Legend of Faith - 2x too fast */
+	{ 232, { "SLES03298" } },
 };
 
 static const struct
