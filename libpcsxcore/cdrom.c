@@ -724,7 +724,7 @@ void cdrPlayReadInterrupt(void)
 	}
 
 	msfiAdd(cdr.SetSectorPlay, 1);
-	cdra_prefetch(cdr.SetSectorPlay[0], cdr.SetSectorPlay[1], cdr.SetSectorPlay[2]);
+	cdra_prefetch(cdr.SetSectorPlay[0], cdr.SetSectorPlay[1], cdr.SetSectorPlay[2], 1);
 
 	// update for CdlGetlocP/autopause
 	generate_subq(cdr.SetSectorPlay);
@@ -1139,7 +1139,7 @@ void cdrInterrupt(void) {
 			memcpy(cdr.SetSectorPlay, cdr.SetSector, 4);
 			cdr.DriveState = DRIVESTATE_SEEK;
 			cdra_prefetch(cdr.SetSectorPlay[0], cdr.SetSectorPlay[1],
-					cdr.SetSectorPlay[2]);
+					cdr.SetSectorPlay[2], 0);
 			/*
 			Crusaders of Might and Magic = 0.5x-4x
 			- fix cutscene speech start
@@ -1300,7 +1300,7 @@ void cdrInterrupt(void) {
 			cdr.DriveState = DRIVESTATE_SEEK;
 			cdr.PhysCdPropagations = 0;
 			cdra_prefetch(cdr.SetSectorPlay[0], cdr.SetSectorPlay[1],
-					cdr.SetSectorPlay[2]);
+					cdr.SetSectorPlay[2], 0);
 
 			cycles = (cdr.Mode & MODE_SPEED) ? cdReadTime : cdReadTime * 2;
 			cycles += seekTime;
@@ -1480,7 +1480,7 @@ static void cdrReadInterrupt(void)
 		cdrReadInterruptSetResult(cdr.StatP);
 
 	msfiAdd(cdr.SetSectorPlay, 1);
-	cdra_prefetch(cdr.SetSectorPlay[0], cdr.SetSectorPlay[1], cdr.SetSectorPlay[2]);
+	cdra_prefetch(cdr.SetSectorPlay[0], cdr.SetSectorPlay[1], cdr.SetSectorPlay[2], 0);
 
 	CDRPLAYREAD_INT((cdr.Mode & MODE_SPEED) ? (cdReadTime / 2) : cdReadTime, 0);
 }
