@@ -120,7 +120,7 @@ ifeq ($(USE_LIBRETRO_VFS),1)
 SOURCES_C += \
              $(LIBRETRO_COMMON)/compat/compat_posix_string.c \
              $(LIBRETRO_COMMON)/compat/fopen_utf8.c \
-             $(LIBRETRO_COMMON)/encodings/compat_strl.c \
+             $(LIBRETRO_COMMON)/compat/compat_strl.c \
              $(LIBRETRO_COMMON)/encodings/encoding_utf.c \
              $(LIBRETRO_COMMON)/file/file_path.c \
              $(LIBRETRO_COMMON)/streams/file_stream.c \
