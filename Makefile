@@ -456,6 +456,8 @@ ifeq "$(USE_LIBRETRO_VFS)" "1"
 OBJS += deps/libretro-common/compat/compat_posix_string.o
 OBJS += deps/libretro-common/compat/fopen_utf8.o
 OBJS += deps/libretro-common/encodings/encoding_utf.o
+OBJS += deps/libretro-common/file/file_path_io.o
+OBJS += deps/libretro-common/file/retro_dirent.o
 OBJS += deps/libretro-common/streams/file_stream.o
 OBJS += deps/libretro-common/streams/file_stream_transforms.o
 OBJS += deps/libretro-common/time/rtime.o
