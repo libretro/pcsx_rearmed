@@ -54,21 +54,14 @@ enum image_type_enum
    IMAGE_TYPE_PNG,
    IMAGE_TYPE_JPEG,
    IMAGE_TYPE_BMP,
-   IMAGE_TYPE_TGA
+   IMAGE_TYPE_TGA,
+   IMAGE_TYPE_WEBP
 };
 
 enum image_type_enum image_texture_get_type(const char *path);
 
-bool image_texture_set_color_shifts(unsigned *r_shift, unsigned *g_shift,
-      unsigned *b_shift, unsigned *a_shift,
-      struct texture_image *out_img);
-
-bool image_texture_color_convert(unsigned r_shift,
-      unsigned g_shift, unsigned b_shift, unsigned a_shift,
-      struct texture_image *out_img);
-
 bool image_texture_load_buffer(struct texture_image *img,
-   enum image_type_enum type, void *buffer, size_t buffer_len);
+   enum image_type_enum type, void *s, size_t len);
 
 bool image_texture_load(struct texture_image *img, const char *path);
 void image_texture_free(struct texture_image *img);
@@ -90,8 +83,11 @@ void image_transfer_set_buffer_ptr(
 int image_transfer_process(
       void *data,
       enum image_type_enum type,
-      uint32_t **buf, size_t size,
-      unsigned *width, unsigned *height);
+      uint32_t **buf,
+      size_t len,
+      unsigned *width,
+      unsigned *height,
+      bool supports_rgba);
 
 bool image_transfer_iterate(void *data, enum image_type_enum type);
 
