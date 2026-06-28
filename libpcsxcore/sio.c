@@ -31,7 +31,24 @@
 
 #ifdef USE_LIBRETRO_VFS
 #include <streams/file_stream_transforms.h>
+#include <file/file_path.h>
 #endif
+
+/**
+ * Retrieves memory card size on the disk, through libretro's VFS, or stat().
+ *
+ * @returns A 64-bit size, or -1 on error.
+ */
+static int64_t McdFileSize(const char *path) {
+#ifdef USE_LIBRETRO_VFS
+	return path_get_size(path);
+#else
+	struct stat buf;
+	if (stat(path, &buf) != -1)
+		return buf.st_size;
+	return -1;
+#endif
+}
 
 // Status Flags
 #define TX_RDY		0x0001
@@ -353,14 +370,11 @@ void LoadMcd(int mcd, char *str) {
 		CreateMcd(str);
 		f = fopen(str, "rb");
 		if (f != NULL) {
-			struct stat buf;
-
-			if (stat(str, &buf) != -1) {
-				if (buf.st_size == MCD_SIZE + 64)
-					fseek(f, 64, SEEK_SET);
-				else if(buf.st_size == MCD_SIZE + 3904)
-					fseek(f, 3904, SEEK_SET);
-			}
+			int64_t sz = McdFileSize(str);
+			if (sz == MCD_SIZE + 64)
+				fseek(f, 64, SEEK_SET);
+			else if (sz == MCD_SIZE + 3904)
+				fseek(f, 3904, SEEK_SET);
 			if (fread(data, 1, MCD_SIZE, f) != MCD_SIZE) {
 #ifndef NDEBUG
 				SysPrintf(_("File IO error in <%s:%s>.\n"), __FILE__, __func__);
@@ -373,14 +387,12 @@ void LoadMcd(int mcd, char *str) {
 			SysMessage(_("Memory card %s failed to load!\n"), str);
 	}
 	else {
-		struct stat buf;
+		int64_t sz = McdFileSize(str);
 		SysPrintf(_("Loading memory card %s\n"), str);
-		if (stat(str, &buf) != -1) {
-			if (buf.st_size == MCD_SIZE + 64)
-				fseek(f, 64, SEEK_SET);
-			else if(buf.st_size == MCD_SIZE + 3904)
-				fseek(f, 3904, SEEK_SET);
-		}
+		if (sz == MCD_SIZE + 64)
+			fseek(f, 64, SEEK_SET);
+		else if (sz == MCD_SIZE + 3904)
+			fseek(f, 3904, SEEK_SET);
 		if (fread(data, 1, MCD_SIZE, f) != MCD_SIZE) {
 #ifndef NDEBUG
 			SysPrintf(_("File IO error in <%s:%s>.\n"), __FILE__, __func__);
@@ -404,16 +416,12 @@ void SaveMcd(char *mcd, char *data, uint32_t adr, int size) {
 
 	f = fopen(mcd, "r+b");
 	if (f != NULL) {
-		struct stat buf;
-
-		if (stat(mcd, &buf) != -1) {
-			if (buf.st_size == MCD_SIZE + 64)
-				fseek(f, adr + 64, SEEK_SET);
-			else if (buf.st_size == MCD_SIZE + 3904)
-				fseek(f, adr + 3904, SEEK_SET);
-			else
-				fseek(f, adr, SEEK_SET);
-		} else
+		int64_t sz = McdFileSize(mcd);
+		if (sz == MCD_SIZE + 64)
+			fseek(f, adr + 64, SEEK_SET);
+		else if (sz == MCD_SIZE + 3904)
+			fseek(f, adr + 3904, SEEK_SET);
+		else
 			fseek(f, adr, SEEK_SET);
 
 		fwrite(data + adr, 1, size, f);
@@ -435,7 +443,7 @@ void SaveMcd(char *mcd, char *data, uint32_t adr, int size) {
 
 void CreateMcd(char *mcd) {
 	FILE *f;
-	struct stat buf;
+	int64_t sz;
 	int s = MCD_SIZE;
 	int i = 0, j;
 
@@ -445,8 +453,9 @@ void CreateMcd(char *mcd) {
 		return;
 	}
 
-	if (stat(mcd, &buf) != -1) {
-		if ((buf.st_size == MCD_SIZE + 3904) || strstr(mcd, ".gme")) {
+	sz = McdFileSize(mcd);
+	if (sz != -1) {
+		if ((sz == MCD_SIZE + 3904) || strstr(mcd, ".gme")) {
 			s = s + 3904;
 			fputc('1', f);
 			s--;
@@ -493,7 +502,7 @@ void CreateMcd(char *mcd) {
 			fputc(0xff, f);
 			while (s-- > (MCD_SIZE + 1))
 				fputc(0, f);
-		} else if ((buf.st_size == MCD_SIZE + 64) || strstr(mcd, ".mem") || strstr(mcd, ".vgs")) {
+		} else if ((sz == MCD_SIZE + 64) || strstr(mcd, ".mem") || strstr(mcd, ".vgs")) {
 			s = s + 64;
 			fputc('V', f);
 			s--;

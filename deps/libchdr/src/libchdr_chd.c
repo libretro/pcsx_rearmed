@@ -3427,5 +3427,9 @@ static int core_stdio_fclose_nonowner(core_file *file) {
 	core_stdio_fseek - core_file wrapper over fclose
 -------------------------------------------------*/
 static int core_stdio_fseek(core_file* file, int64_t offset, int whence) {
-	return core_stdio_fseek_impl((FILE*)file->argp, offset, whence);
+	/* fseek()/fseeko() return 0 on success, but libretro VFS's seek()
+	 * returns the new file position. We adapt the return value to the
+	 * fseek semantics (0 on success, -1 on error), so callers that test the
+	 * result against 0 work under both stdio and VFS. */
+	return core_stdio_fseek_impl((FILE*)file->argp, offset, whence) < 0 ? -1 : 0;
 }
