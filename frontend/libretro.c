@@ -1122,7 +1122,7 @@ void retro_set_environment(retro_environment_t cb)
    }
 
 #ifdef USE_LIBRETRO_VFS
-   vfs_iface_info.required_interface_version = 4; /* We use stat_64 for larger file sizes. */
+   vfs_iface_info.required_interface_version = 3; /* stat */
    vfs_iface_info.iface                      = NULL;
    if (environ_cb(RETRO_ENVIRONMENT_GET_VFS_INTERFACE, &vfs_iface_info))
    {
