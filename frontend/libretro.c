@@ -20,7 +20,7 @@
 #include <unistd.h>
 #include <sys/syscall.h>
 #endif
-#include <zlib.h>
+#include "zlib_wrapper.h"
 
 #include "retro_miscellaneous.h"
 #ifdef SWITCH
@@ -1326,6 +1326,10 @@ static void save_close(void *file)
       memset(fp->buf + fp->pos, 0, r_size - fp->pos);
    free(fp);
 }
+
+struct PcsxSaveFuncs SaveFuncs = {
+	save_open, save_read, save_write, save_seek, save_close
+};
 
 bool retro_serialize(void *data, size_t size)
 {
@@ -3941,12 +3945,6 @@ void retro_init(void)
       rumble_cb = rumble.set_rumble_state;
 
    pl_rearmed_cbs.gpu_peops.dwActFixes = GPU_PEOPS_OLD_FRAME_SKIP;
-
-   SaveFuncs.open = save_open;
-   SaveFuncs.read = save_read;
-   SaveFuncs.write = save_write;
-   SaveFuncs.seek = save_seek;
-   SaveFuncs.close = save_close;
 
    if (environ_cb(RETRO_ENVIRONMENT_GET_INPUT_BITMASKS, NULL))
       libretro_supports_bitmasks = true;

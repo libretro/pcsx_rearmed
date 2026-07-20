@@ -1,7 +1,7 @@
 # Makefile for PCSX ReARMed (libretro)
 
 DEBUG ?= 0
-WANT_ZLIB ?= 1
+USE_MINIZ ?= 1
 HAVE_CHD ?= 1
 HAVE_PHYSICAL_CDROM ?= 1
 USE_ASYNC_CDROM ?= 1
@@ -121,7 +121,7 @@ GIT_VERSION := " $(shell git rev-parse --short HEAD || echo unknown)"
 ifneq ($(GIT_VERSION)," unknown")
 	CFLAGS += -DGIT_VERSION=\"$(GIT_VERSION)\"
 endif
-ifneq ($(WANT_ZLIB),1)
+ifneq ($(USE_MINIZ),1)
 LIBZ := -lz
 endif
 LIBPTHREAD := -lpthread
@@ -285,7 +285,6 @@ else ifeq ($(platform), libnx)
    NO_POSIX_MEMALIGN := 1
    NO_MMAP := 1 # for psxmem
    LIBPTHREAD :=
-   WANT_ZLIB = 0
    PARTIAL_LINKING = 1
    BUILTIN_GPU = neon
    DYNAREC = ari64
@@ -379,7 +378,6 @@ else ifeq ($(platform), ctr)
 	DYNAREC = ari64
 	ARCH = arm
 	PARTIAL_LINKING = 1
-	WANT_ZLIB = 0
 	NO_POSIX_MEMALIGN := 1
 	NO_MMAP := 1 # for psxmem
 	HAVE_PHYSICAL_CDROM = 0
@@ -604,7 +602,7 @@ else ifeq ($(platform), emscripten)
    fpic    := -fPIC
    NO_MMAP = 1
    # we can use -lz for emscripten's built-in zlib port
-   WANT_ZLIB=0
+   USE_MINIZ = 0
    CFLAGS_OPT = -O2
    CFLAGS += -DNO_DYLIB -DNO_SOCKET
    CFLAGS += -msimd128 -ftree-vectorize

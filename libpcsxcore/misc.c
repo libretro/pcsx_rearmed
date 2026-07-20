@@ -34,7 +34,7 @@
 #include "ppf.h"
 #include "psxbios.h"
 #include "database.h"
-#include <zlib.h>
+#include "zlib_wrapper.h"
 #include "revision.h"
 
 #ifdef USE_LIBRETRO_VFS
@@ -659,6 +659,11 @@ fail_io:
 
 // STATES
 
+#ifndef HAVE_LIBRETRO
+#ifdef USE_MINIZ
+#error "need real zlib for gz* funcs, sorry"
+#endif
+
 static void *zlib_open(const char *name, const char *mode)
 {
 	return gzopen(name, mode);
@@ -687,6 +692,7 @@ static void zlib_close(void *file)
 struct PcsxSaveFuncs SaveFuncs = {
 	zlib_open, zlib_read, zlib_write, zlib_seek, zlib_close
 };
+#endif // HAVE_LIBRETRO
 
 static const char PcsxHeader[32] = "STv4 PCSXra " REV;
 
