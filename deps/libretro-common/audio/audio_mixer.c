@@ -46,7 +46,9 @@
 #endif
 
 #ifdef HAVE_DR_FLAC
+#include <retro_inline.h>
 #define DR_FLAC_IMPLEMENTATION
+#define DRFLAC_API static INLINE
 #include <dr/dr_flac.h>
 #endif
 
@@ -76,6 +78,7 @@
 struct audio_mixer_sound
 {
    enum audio_mixer_type type;
+   void* user_data;
 
    union
    {
@@ -204,12 +207,12 @@ static unsigned s_rate = 0;
 static void audio_mixer_release(audio_mixer_voice_t* voice);
 
 #ifdef HAVE_RWAV
-static bool wav_to_float(const rwav_t* wav, float** pcm, size_t samples_out)
+static bool wav_to_float(const rwav_t* wav, float** pcm, size_t len)
 {
    size_t i;
    /* Allocate on a 16-byte boundary, and pad to a multiple of 16 bytes */
    float *f           = (float*)memalign_alloc(16,
-         ((samples_out + 15) & ~15) * sizeof(float));
+         ((len + 15) & ~15) * sizeof(float));
 
    if (!f)
       return false;
@@ -416,7 +419,12 @@ audio_mixer_sound_t* audio_mixer_load_wav(void *buffer, int32_t size,
 audio_mixer_sound_t* audio_mixer_load_ogg(void *buffer, int32_t size)
 {
 #ifdef HAVE_STB_VORBIS
-   audio_mixer_sound_t* sound = (audio_mixer_sound_t*)calloc(1, sizeof(*sound));
+   audio_mixer_sound_t* sound;
+
+   if (!buffer || size <= 0)
+      return NULL;
+
+   sound = (audio_mixer_sound_t*)calloc(1, sizeof(*sound));
 
    if (!sound)
       return NULL;
@@ -716,10 +724,29 @@ static bool audio_mixer_play_flac(
    void *flac_buffer                = NULL;
    void *resampler_data            = NULL;
    const retro_resampler_t* resamp = NULL;
-   drflac *dr_flac          = drflac_open_memory((const unsigned char*)sound->types.flac.data,sound->types.flac.size);
+   drflac *dr_flac          = drflac_open_memory((const unsigned char*)sound->types.flac.data, sound->types.flac.size, NULL);
 
    if (!dr_flac)
       return false;
+
+   /* The downstream mixer (audio_mixer_mix_flac) requests
+    * AUDIO_MIXER_TEMP_BUFFER / 2 frames into a stack buffer
+    * sized AUDIO_MIXER_TEMP_BUFFER floats.  drflac writes
+    * frame_count * channel_count floats, so this only fits
+    * exactly for stereo.  Mono fits but the downstream
+    * accounting is wrong (per existing comment); >2 channels
+    * overflows the stack buffer (e.g. 8-channel FLAC writes
+    * 4 * AUDIO_MIXER_TEMP_BUFFER floats = 4x the buffer).
+    * Reject anything that isn't stereo here rather than risk a
+    * stack overflow during mix.  Mono should be fixed
+    * separately by adjusting the mixer's per-channel
+    * accounting. */
+   if (dr_flac->channels != 2)
+   {
+      drflac_close(dr_flac);
+      return false;
+   }
+
    if (dr_flac->sampleRate != s_rate)
    {
       ratio = (double)s_rate / (double)(dr_flac->sampleRate);
@@ -1199,7 +1226,42 @@ static void audio_mixer_mix_flac(float* buffer, size_t num_frames,
    if (voice->types.flac.position == voice->types.flac.samples)
    {
 again:
-      temp_samples = (unsigned)drflac_read_f32( voice->types.flac.stream, AUDIO_MIXER_TEMP_BUFFER, temp_buffer);
+      /* drflac_read_pcm_frames_f32 takes a frame count and
+       * writes frame_count * channel_count floats into the
+       * output buffer.  Request at most AUDIO_MIXER_TEMP_BUFFER
+       * / 2 frames so a stereo FLAC fills temp_buffer[AUDIO_
+       * MIXER_TEMP_BUFFER] exactly, then multiply the return
+       * value by 2 to convert frame count to interleaved float
+       * count.  This matches the convention the downstream code
+       * (info.input_frames = temp_samples / 2, memcpy length
+       * of temp_samples * sizeof(float)) and the sibling mp3
+       * and ogg mix paths already use.
+       *
+       * Pre-patch this passed AUDIO_MIXER_TEMP_BUFFER as the
+       * frame count without the '/ 2' and stored the return as
+       * 'temp_samples' without the '* 2'.  For a stereo FLAC
+       * (by far the most common case) drflac wrote 2 *
+       * AUDIO_MIXER_TEMP_BUFFER = 16384 floats into a 8192-
+       * float stack buffer - a 32 KiB stack overflow.  Any
+       * stereo FLAC asset played through the mixer (cheevo
+       * unlock sounds, menu BGM, user-loaded content via the
+       * audio mixer playlist, etc.) corrupted the stack on
+       * every mix tick.  The downstream 'temp_samples / 2'
+       * and memcpy length were also off by 2x under the old
+       * convention, but the stack overflow hit first.
+       *
+       * For mono FLAC: the '* 2' overstates the float count by
+       * 2x, causing the memcpy / resampler to read
+       * uninitialised stack past the actual data.  That matches
+       * the pre-existing implicit stereo-only assumption of
+       * the FLAC/MP3/OGG mixer paths (voice->types.flac.
+       * buf_samples is sized as TEMP_BUFFER * ratio, with no
+       * per-channel adjustment) rather than introducing new
+       * mono handling here.  Fixing mono playback is a separate
+       * change. */
+      temp_samples = (unsigned)drflac_read_pcm_frames_f32(
+            voice->types.flac.stream,
+            AUDIO_MIXER_TEMP_BUFFER / 2, temp_buffer) * 2;
       if (temp_samples == 0)
       {
          if (voice->repeat)
@@ -1207,7 +1269,7 @@ again:
             if (voice->stop_cb)
                voice->stop_cb(voice->sound, AUDIO_MIXER_SOUND_REPEATED);
 
-            drflac_seek_to_sample(voice->types.flac.stream,0);
+            drflac_seek_to_pcm_frame(voice->types.flac.stream,0);
             goto again;
          }
 

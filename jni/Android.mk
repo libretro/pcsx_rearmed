@@ -123,6 +123,8 @@ SOURCES_C += \
              $(LIBRETRO_COMMON)/compat/compat_strl.c \
              $(LIBRETRO_COMMON)/encodings/encoding_utf.c \
              $(LIBRETRO_COMMON)/file/file_path.c \
+             $(LIBRETRO_COMMON)/file/file_path_io.c \
+             $(LIBRETRO_COMMON)/file/retro_dirent.c \
              $(LIBRETRO_COMMON)/streams/file_stream.c \
              $(LIBRETRO_COMMON)/streams/file_stream_transforms.c \
              $(LIBRETRO_COMMON)/string/stdstring.c \

@@ -51,6 +51,12 @@ RETRO_BEGIN_DECLS
       base->var = tmp; \
 } while(0)
 
+enum config_file_flags
+{
+   CONF_FILE_FLG_MODIFIED                 = (1 << 0),
+   CONF_FILE_FLG_GUARANTEED_NO_DUPLICATES = (1 << 1)
+};
+
 struct config_file
 {
    char *path;
@@ -61,8 +67,7 @@ struct config_file
    struct config_include_list *includes;
    struct path_linked_list *references;
    unsigned include_depth;
-   bool guaranteed_no_duplicates;
-   bool modified;
+   uint8_t flags;
 };
 
 typedef struct config_file config_file_t;
@@ -136,7 +141,7 @@ config_file_t *config_file_new_from_path_to_string(const char *path);
  **/
 void config_file_free(config_file_t *conf);
 
-void config_file_add_reference(config_file_t *conf, char *path);
+size_t config_file_add_reference(config_file_t *conf, char *path);
 
 bool config_file_deinitialize(config_file_t *conf);
 
@@ -269,7 +274,7 @@ bool config_get_array(config_file_t *conf, const char *entry, char *s, size_t le
   * Hidden non-leaf function cost:
   * - Calls strlcpy
   **/
-bool config_get_config_path(config_file_t *conf, char *s, size_t len);
+size_t config_get_config_path(config_file_t *conf, char *s, size_t len);
 
 /* Extracts a string to a preallocated buffer. Avoid memory allocation.
  * Recognized magic like ~/. Similar to config_get_array() otherwise. */
@@ -277,7 +282,7 @@ bool config_get_path(config_file_t *conf, const char *entry, char *s, size_t len
 
 /**
  * config_get_bool:
- * 
+ *
  * Extracts a boolean from config.
  * Valid boolean true are "true" and "1". Valid false are "false" and "0".
  * Other values will be treated as an error.
@@ -291,24 +296,17 @@ bool config_get_bool(config_file_t *conf, const char *entry, bool *in);
 
 /* Setters. Similar to the getters.
  * Will not write to entry if the entry was obtained from an #include. */
-void config_set_double(config_file_t *conf, const char *entry, double value);
-void config_set_float(config_file_t *conf, const char *entry, float value);
-void config_set_int(config_file_t *conf, const char *entry, int val);
-void config_set_hex(config_file_t *conf, const char *entry, unsigned val);
-void config_set_uint64(config_file_t *conf, const char *entry, uint64_t val);
-void config_set_char(config_file_t *conf, const char *entry, char val);
+size_t config_set_double(config_file_t *conf, const char *entry, double value);
+size_t config_set_float(config_file_t *conf, const char *entry, float value);
+size_t config_set_int(config_file_t *conf, const char *entry, int val);
+size_t config_set_hex(config_file_t *conf, const char *entry, unsigned val);
+size_t config_set_uint64(config_file_t *conf, const char *entry, uint64_t val);
+size_t config_set_char(config_file_t *conf, const char *entry, char val);
+size_t config_set_uint(config_file_t *conf, const char *key, unsigned int val);
+
+void config_set_path(config_file_t *conf, const char *entry, const char *val);
 void config_set_string(config_file_t *conf, const char *entry, const char *val);
 void config_unset(config_file_t *conf, const char *key);
-void config_set_path(config_file_t *conf, const char *entry, const char *val);
-
-/**
- * config_set_bool:
-
- * TODO/FIXME - could be turned into a trivial macro or removed
- **/
-void config_set_bool(config_file_t *conf, const char *entry, bool val);
-
-void config_set_uint(config_file_t *conf, const char *key, unsigned int val);
 
 /**
  * config_file_write:
