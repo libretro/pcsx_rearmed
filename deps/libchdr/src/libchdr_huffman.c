@@ -100,9 +100,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <libchdr/huffman.h>
-
-#define MAX(x,y) ((x) > (y) ? (x) : (y))
+#include "../include/libchdr/huffman.h"
+#include "../include/libchdr/macros.h"
 
 /***************************************************************************
  *  MACROS
@@ -385,8 +384,10 @@ static int huffman_tree_node_compare(const void *item1, const void *item2)
 	const struct node_t *node2 = *(const struct node_t **)item2;
 	if (node2->weight != node1->weight)
 		return node2->weight - node1->weight;
+#if 0
 	if (node2->bits - node1->bits == 0)
 		fprintf(stderr, "identical node sort keys, should not happen!\n");
+#endif
 	return (int)node1->bits - (int)node2->bits;
 }
 
@@ -419,21 +420,21 @@ int huffman_build_tree(struct huffman_decoder* decoder, uint32_t totaldata, uint
 		}
 
 #if 0
-        fprintf(stderr, "Pre-sort:\n");
-        for (int i = 0; i < listitems; i++) {
-            fprintf(stderr, "weight: %d code: %d\n", list[i]->m_weight, list[i]->m_bits);
-        }
+	fprintf(stderr, "Pre-sort:\n");
+	for (int i = 0; i < listitems; i++) {
+		fprintf(stderr, "weight: %d code: %d\n", list[i]->m_weight, list[i]->m_bits);
+	}
 #endif
 
 	/* sort the list by weight, largest weight first */
 	qsort(&list[0], listitems, sizeof(list[0]), huffman_tree_node_compare);
 
 #if 0
-        fprintf(stderr, "Post-sort:\n");
-        for (int i = 0; i < listitems; i++) {
-            fprintf(stderr, "weight: %d code: %d\n", list[i]->m_weight, list[i]->m_bits);
-        }
-        fprintf(stderr, "===================\n");
+	fprintf(stderr, "Post-sort:\n");
+	for (int i = 0; i < listitems; i++) {
+		fprintf(stderr, "weight: %d code: %d\n", list[i]->m_weight, list[i]->m_bits);
+	}
+	fprintf(stderr, "===================\n");
 #endif
 
 	/* now build the tree */
