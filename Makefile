@@ -11,7 +11,13 @@ HAVE_CHD ?= 1
 ifneq ($(DEBUG)$(DEBUG_SYMS), 00)
 CFLAGS += -ggdb
 endif
+ifeq ($(CFLAGS_OPT),)
+ifneq ($(shell $(CC) -E -dD $(CFLAGS) include/arm_features.h | grep -q '__clang__' && echo 1),)
+CFLAGS_OPT ?= -O3
+else
 CFLAGS_OPT ?= -Ofast
+endif
+endif
 ifneq ($(DEBUG), 1)
 CFLAGS += $(CFLAGS_OPT)
 ifneq ($(ASSERTS), 1)
@@ -440,7 +446,6 @@ ifeq "$(USE_LIBRETRO_VFS)" "1"
 OBJS += deps/libretro-common/compat/compat_posix_string.o
 OBJS += deps/libretro-common/compat/fopen_utf8.o
 OBJS += deps/libretro-common/encodings/encoding_utf.o
-OBJS += deps/libretro-common/file/file_path_io.o
 OBJS += deps/libretro-common/file/retro_dirent.o
 OBJS += deps/libretro-common/streams/file_stream.o
 OBJS += deps/libretro-common/streams/file_stream_transforms.o

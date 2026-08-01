@@ -116,7 +116,7 @@ DUMMY := $(shell git config --global --add safe.directory /builds/libretro/pcsx_
 endif
 
 TARGET_NAME := pcsx_rearmed
-ARCH_DETECTED := $(shell $(CC) $(CFLAGS) -dumpmachine | awk -F- '{print $$1}')
+ARCH_DETECTED := $(shell $(firstword $(CC)) -dumpmachine $(CFLAGS) | awk -F- '{print $$1}')
 GIT_VERSION := " $(shell git rev-parse --short HEAD || echo unknown)"
 ifneq ($(GIT_VERSION)," unknown")
 	CFLAGS += -DGIT_VERSION=\"$(GIT_VERSION)\"
@@ -235,9 +235,9 @@ else
 	BUILTIN_GPU = neon
 	CFLAGS += -marm -mcpu=cortex-a8 -mtune=cortex-a8 -mfpu=neon
 	ASFLAGS += -marm -mcpu=cortex-a8 -mtune=cortex-a8 -mfpu=neon
+	CC_AS = perl ./tools/gas-preprocessor.pl $(CC)
 endif
 	HAVE_PHYSICAL_CDROM = 0
-	CC_AS = perl ./tools/gas-preprocessor.pl $(CC)
 ifeq ($(platform),$(filter $(platform),ios9 ios-arm64))
 	MINVERSION = -miphoneos-version-min=8.0
 else
@@ -265,7 +265,6 @@ endif
 	BUILTIN_GPU = neon
 	DYNAREC = 0
 	HAVE_PHYSICAL_CDROM = 0
-	CC_AS = perl ./tools/gas-preprocessor.pl $(CC)
 	MINVERSION = -mappletvos-version-min=11.0
 	CFLAGS += $(MINVERSION)
 	FSECTIONS_LDFLAGS = -Wl,-dead_strip
