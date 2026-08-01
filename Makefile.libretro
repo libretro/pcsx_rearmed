@@ -600,8 +600,11 @@ else ifeq ($(platform), emscripten)
    TARGET  := $(TARGET_NAME)_libretro_$(platform).bc
    fpic    := -fPIC
    NO_MMAP = 1
-   # we can use -lz for emscripten's built-in zlib port
+   # use emscripten's built-in zlib port instead of miniz, it has to be requested
+   # explicitly with -sUSE_ZLIB=1 (just like RetroArch's Makefile.emscripten does)
    USE_MINIZ = 0
+   CFLAGS += -sUSE_ZLIB=1
+   EXTRA_LDFLAGS += -sUSE_ZLIB=1
    CFLAGS_OPT = -O2
    CFLAGS += -DNO_DYLIB -DNO_SOCKET
    CFLAGS += -msimd128 -ftree-vectorize
