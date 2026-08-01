@@ -84,7 +84,7 @@ struct psx_gpu {
     uint32_t fb_dirty_display_area:1;
     uint32_t draw_display_intersect:1;
     uint32_t old_interlace:1;
-    uint32_t allow_interlace:2;
+    uint32_t allow_interlace:2;         // 0 off, 1 on, 2 guess, 3 on_db
     uint32_t blanked:1;
     uint32_t use_alternative_flip:1;
     uint32_t enhancement_enable:1;

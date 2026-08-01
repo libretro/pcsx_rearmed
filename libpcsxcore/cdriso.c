@@ -26,7 +26,7 @@
 
 #include <assert.h>
 #include <errno.h>
-#include <zlib.h>
+#include "zlib_wrapper.h"
 #ifdef HAVE_CHD
 #include <libchdr/chd.h>
 #endif

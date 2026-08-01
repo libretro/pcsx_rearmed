@@ -92,31 +92,10 @@ OBJS += libpcsxcore/cdriso.o libpcsxcore/cdrom.o libpcsxcore/cdrom-async.o \
 OBJS += libpcsxcore/gte.o libpcsxcore/gte_nf.o libpcsxcore/gte_divider.o
 #OBJS += libpcsxcore/debug.o libpcsxcore/socket.o libpcsxcore/disr3000a.o
 
-ifeq ($(WANT_ZLIB),1)
-ZLIB_DIR = deps/libchdr/deps/zlib-1.3.1
-CFLAGS += -I$(ZLIB_DIR)
-OBJS += $(ZLIB_DIR)/adler32.o \
-        $(ZLIB_DIR)/compress.o \
-        $(ZLIB_DIR)/crc32.o \
-        $(ZLIB_DIR)/deflate.o \
-        $(ZLIB_DIR)/gzclose.o \
-        $(ZLIB_DIR)/gzlib.o \
-        $(ZLIB_DIR)/gzread.o \
-        $(ZLIB_DIR)/gzwrite.o \
-        $(ZLIB_DIR)/infback.o \
-        $(ZLIB_DIR)/inffast.o \
-        $(ZLIB_DIR)/inflate.o \
-        $(ZLIB_DIR)/inftrees.o \
-        $(ZLIB_DIR)/trees.o \
-        $(ZLIB_DIR)/uncompr.o \
-        $(ZLIB_DIR)/zutil.o
-$(ZLIB_DIR)/%.o: CFLAGS += -DHAVE_UNISTD_H
-endif
-
 ifeq "$(ARCH)" "arm"
 OBJS += libpcsxcore/gte_arm.o
 OBJS += libpcsxcore/gte_nf_arm.o
-else ifneq (,$(findstring $(ARCH),aarch64 arm64))
+else ifneq (,$(filter $(ARCH),aarch64 arm64))
 OBJS += libpcsxcore/gte_arm64.o
 OBJS += libpcsxcore/gte_nf_arm64.o
 endif
@@ -213,7 +192,7 @@ else ifeq "$(DYNAREC)" "ari64"
  endif
  ifeq "$(ARCH)" "arm"
  OBJS += libpcsxcore/new_dynarec/linkage_arm.o
- else ifneq (,$(findstring $(ARCH),aarch64 arm64))
+ else ifneq (,$(filter $(ARCH),aarch64 arm64))
  OBJS += libpcsxcore/new_dynarec/linkage_arm64.o
  else
  $(error no dynarec support for architecture $(ARCH))
@@ -331,39 +310,43 @@ endif
 # libchdr
 ifeq "$(HAVE_CHD)" "1"
 LCHDR = deps/libchdr
-LCHDR_LZMA = $(LCHDR)/deps/lzma-24.05
-LCHDR_ZSTD = $(LCHDR)/deps/zstd-1.5.6/lib
+LCHDR_LZMA = $(LCHDR)/deps/lzma-25.01
+LCHDR_ZSTD = $(LCHDR)/deps/zstd-1.5.7
 OBJS += $(LCHDR)/src/libchdr_bitstream.o
 OBJS += $(LCHDR)/src/libchdr_cdrom.o
 OBJS += $(LCHDR)/src/libchdr_chd.o
+OBJS += $(LCHDR)/src/libchdr_codec_cdfl.o
+OBJS += $(LCHDR)/src/libchdr_codec_cdlz.o
+OBJS += $(LCHDR)/src/libchdr_codec_cdzl.o
+OBJS += $(LCHDR)/src/libchdr_codec_cdzs.o
+OBJS += $(LCHDR)/src/libchdr_codec_flac.o
+OBJS += $(LCHDR)/src/libchdr_codec_huff.o
+OBJS += $(LCHDR)/src/libchdr_codec_lzma.o
+OBJS += $(LCHDR)/src/libchdr_codec_zlib.o
+OBJS += $(LCHDR)/src/libchdr_codec_zstd.o
 OBJS += $(LCHDR)/src/libchdr_flac.o
 OBJS += $(LCHDR)/src/libchdr_huffman.o
-$(LCHDR)/src/%.o: CFLAGS += -Wno-unused -Wno-maybe-uninitialized -std=gnu11
-OBJS += $(LCHDR_LZMA)/src/Alloc.o
-OBJS += $(LCHDR_LZMA)/src/CpuArch.o
-OBJS += $(LCHDR_LZMA)/src/Delta.o
-OBJS += $(LCHDR_LZMA)/src/LzFind.o
+ifneq ($(USE_MINIZ),1)
+$(LCHDR)/src/%.o: CFLAGS += -DCHDR_SYSTEM_ZLIB
+endif
 OBJS += $(LCHDR_LZMA)/src/LzmaDec.o
-OBJS += $(LCHDR_LZMA)/src/LzmaEnc.o
-OBJS += $(LCHDR_LZMA)/src/Sort.o
-$(LCHDR_LZMA)/src/%.o: CFLAGS += -Wno-unused -DZ7_ST -I$(LCHDR_LZMA)/include
+ifneq (,$(filter $(ARCH),aarch64 arm64))
+OBJS += $(LCHDR_LZMA)/Asm/arm64/LzmaDecOpt.o
+$(LCHDR_LZMA)/src/%.o: CFLAGS += -DZ7_LZMA_DEC_OPT
+endif
 $(LCHDR)/src/%.o: CFLAGS += -I$(LCHDR_LZMA)/include
-OBJS += $(LCHDR_ZSTD)/common/entropy_common.o
-OBJS += $(LCHDR_ZSTD)/common/error_private.o
-OBJS += $(LCHDR_ZSTD)/common/fse_decompress.o
-OBJS += $(LCHDR_ZSTD)/common/xxhash.o
-OBJS += $(LCHDR_ZSTD)/common/zstd_common.o
-OBJS += $(LCHDR_ZSTD)/decompress/huf_decompress.o
-OBJS += $(LCHDR_ZSTD)/decompress/huf_decompress_amd64.o
-OBJS += $(LCHDR_ZSTD)/decompress/zstd_ddict.o
-OBJS += $(LCHDR_ZSTD)/decompress/zstd_decompress_block.o
-OBJS += $(LCHDR_ZSTD)/decompress/zstd_decompress.o
-$(LCHDR_ZSTD)/common/%.o \
-$(LCHDR_ZSTD)/decompress/%.o: CFLAGS += -I$(LCHDR_ZSTD)
-$(LCHDR)/src/%.o: CFLAGS += -I$(LCHDR_ZSTD)
+OBJS += $(LCHDR_ZSTD)/zstddeclib.o
 libpcsxcore/cdriso.o: CFLAGS += -Wno-unused-function
 CFLAGS += -DHAVE_CHD -I$(LCHDR)/include
 endif
+
+# zlib/miniz
+ifeq ($(USE_MINIZ),1)
+MINIZ_DIR = deps/libchdr/deps/miniz-3.1.1
+CFLAGS += -I$(MINIZ_DIR) -DUSE_MINIZ
+OBJS += $(MINIZ_DIR)/miniz.o
+$(MINIZ_DIR)/miniz.o: CFLAGS += -DMINIZ_NO_STDIO -DMINIZ_NO_DEFLATE_APIS -DMINIZ_NO_ARCHIVE_APIS
+endif # else we use system zlib
 
 # frontend/gui
 OBJS += frontend/cspace.o
@@ -442,6 +425,7 @@ ifeq "$(PLATFORM)" "libretro"
 ifneq "$(HAVE_PHYSICAL_CDROM)$(USE_LIBRETRO_VFS)" "00"
 OBJS += deps/libretro-common/compat/compat_strl.o
 OBJS += deps/libretro-common/file/file_path.o
+OBJS += deps/libretro-common/file/file_path_io.o
 OBJS += deps/libretro-common/string/stdstring.o
 OBJS += deps/libretro-common/vfs/vfs_implementation.o
 endif
@@ -456,6 +440,8 @@ ifeq "$(USE_LIBRETRO_VFS)" "1"
 OBJS += deps/libretro-common/compat/compat_posix_string.o
 OBJS += deps/libretro-common/compat/fopen_utf8.o
 OBJS += deps/libretro-common/encodings/encoding_utf.o
+OBJS += deps/libretro-common/file/file_path_io.o
+OBJS += deps/libretro-common/file/retro_dirent.o
 OBJS += deps/libretro-common/streams/file_stream.o
 OBJS += deps/libretro-common/streams/file_stream_transforms.o
 OBJS += deps/libretro-common/time/rtime.o

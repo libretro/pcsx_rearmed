@@ -20,7 +20,7 @@
 #include <unistd.h>
 #include <sys/syscall.h>
 #endif
-#include <zlib.h>
+#include "zlib_wrapper.h"
 
 #include "retro_miscellaneous.h"
 #ifdef SWITCH
@@ -54,6 +54,8 @@
 
 #ifdef USE_LIBRETRO_VFS
 #include <streams/file_stream_transforms.h>
+#include <file/file_path.h>
+#include <retro_dirent.h>
 #endif
 
 #ifdef _3DS
@@ -1121,10 +1123,14 @@ void retro_set_environment(retro_environment_t cb)
    }
 
 #ifdef USE_LIBRETRO_VFS
-   vfs_iface_info.required_interface_version = 1;
+   vfs_iface_info.required_interface_version = 3; /* stat */
    vfs_iface_info.iface                      = NULL;
    if (environ_cb(RETRO_ENVIRONMENT_GET_VFS_INTERFACE, &vfs_iface_info))
+   {
 	   filestream_vfs_init(&vfs_iface_info);
+	   path_vfs_init(&vfs_iface_info);
+	   dirent_vfs_init(&vfs_iface_info);
+   }
 #endif
 }
 
@@ -1326,6 +1332,10 @@ static void save_close(void *file)
       memset(fp->buf + fp->pos, 0, r_size - fp->pos);
    free(fp);
 }
+
+struct PcsxSaveFuncs SaveFuncs = {
+	save_open, save_read, save_write, save_seek, save_close
+};
 
 bool retro_serialize(void *data, size_t size)
 {
@@ -3649,6 +3659,33 @@ finish:
 }
 
 #ifndef VITA
+#ifdef USE_LIBRETRO_VFS
+/**
+ * Finds a given bios by using libretro-common's readdir().
+ */
+static void find_any_bios(const char *dirpath, char *path, size_t path_size)
+{
+   struct RDIR *dir;
+   const char *name;
+
+   dir = retro_opendir(dirpath);
+   if (dir == NULL)
+      return;
+
+   while (retro_readdir(dir))
+   {
+      name = retro_dirent_get_name(dir);
+      if (name[0] == '.' && (name[1] == '.' || !name[1]))
+         continue;
+      snprintf(path, path_size, "%s%c%s", dirpath, SLASH, name);
+      try_use_bios(path, path_size, true, false);
+      if (have_all_bios())
+         break;
+   }
+
+   retro_closedir(dir);
+}
+#else
 #include <sys/types.h>
 #include <dirent.h>
 
@@ -3673,6 +3710,7 @@ static void find_any_bios(const char *dirpath, char *path, size_t path_size)
 
    closedir(dir);
 }
+#endif
 #else
 #define find_any_bios(...)
 #endif
@@ -3941,12 +3979,6 @@ void retro_init(void)
       rumble_cb = rumble.set_rumble_state;
 
    pl_rearmed_cbs.gpu_peops.dwActFixes = GPU_PEOPS_OLD_FRAME_SKIP;
-
-   SaveFuncs.open = save_open;
-   SaveFuncs.read = save_read;
-   SaveFuncs.write = save_write;
-   SaveFuncs.seek = save_seek;
-   SaveFuncs.close = save_close;
 
    if (environ_cb(RETRO_ENVIRONMENT_GET_INPUT_BITMASKS, NULL))
       libretro_supports_bitmasks = true;

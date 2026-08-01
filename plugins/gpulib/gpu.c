@@ -1227,6 +1227,8 @@ void GPUrearmedCallbacks(const struct rearmed_cbs *cbs)
   gpu.state.hcnt = (uint32_t *)cbs->gpu_hcnt;
   gpu.state.frame_count = (uint32_t *)cbs->gpu_frame_count;
   gpu.state.allow_interlace = cbs->gpu_neon.allow_interlace;
+  if (gpu.state.allow_interlace > 1)
+    gpu.state.allow_interlace = (cbs->gpu_hacks & GPU_HACK_NEEDS_INTERLACE) ? 3 : 2;
   gpu.state.enhancement_enable = cbs->gpu_neon.enhancement_enable;
   gpu.state.enhancement_active = 0;
   gpu.state.downscale_enable = cbs->scale_hires;
