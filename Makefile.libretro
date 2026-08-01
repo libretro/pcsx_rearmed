@@ -379,8 +379,7 @@ else ifeq ($(platform), ctr)
 	DYNAREC = ari64
 	ARCH = arm
 	PARTIAL_LINKING = 1
-	# RetroArch's Makefile.ctr builds without HAVE_ZLIB and links only
-	# -lm -lctru, so nothing resolves zlib for us - bake it in (WANT_ZLIB=1)
+	WANT_ZLIB = 0
 	NO_POSIX_MEMALIGN := 1
 	NO_MMAP := 1 # for psxmem
 	HAVE_PHYSICAL_CDROM = 0
