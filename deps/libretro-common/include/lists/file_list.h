@@ -50,6 +50,19 @@ typedef struct file_list
 
    size_t capacity;
    size_t size;
+   /* Optional destructor for item_file::actiondata.  NULL means the
+    * actiondata is a plain block and free() is enough, which is what
+    * every user outside the menu wants.  The menu sets this because
+    * its actiondata owns further allocations; without it every path
+    * that can destroy a list -- and there are seven, spread across
+    * menu_driver.c, xmb.c and ozone.c -- would have to know how to
+    * take one apart.
+    *
+    * Every file_list_t in tree is either calloc()ed, memset() to zero,
+    * embedded in a calloc()ed handle, or field-initialised in
+    * menu_list_new(), so this defaults to NULL without any caller
+    * change. */
+   void (*actiondata_free)(void *actiondata);
 } file_list_t;
 
 void *file_list_get_userdata_at_offset(const file_list_t *list,
@@ -104,6 +117,19 @@ void file_list_free_actiondata(const file_list_t *list, size_t idx);
 
 void file_list_set_alt_at_offset(file_list_t *list, size_t index,
       const char *alt);
+
+/**
+ * @brief sets the label of the entry at the given offset
+ *
+ * The previous label (if any) is freed and replaced with a copy of
+ * the supplied string.
+ *
+ * @param list The list containing the entry
+ * @param index Offset of the entry whose label should be set
+ * @param label Label to copy into the entry
+ */
+void file_list_set_label_at_offset(file_list_t *list, size_t index,
+      const char *label);
 
 void file_list_sort_on_alt(file_list_t *list);
 

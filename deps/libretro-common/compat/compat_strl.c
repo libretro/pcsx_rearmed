@@ -20,43 +20,37 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include <stdlib.h>
-#include <ctype.h>
-
 #include <compat/strl.h>
 
 /* Implementation of strlcpy()/strlcat() based on OpenBSD. */
 
-#ifndef __MACH__
-
-size_t strlcpy(char *dest, const char *source, size_t size)
+#if !(defined(__MACH__) && defined(__APPLE__))
+size_t strlcpy(char *s, const char *in, size_t len)
 {
-   size_t src_size = 0;
-   size_t        n = size;
-
-   if (n)
-      while (--n && (*dest++ = *source++)) src_size++;
-
-   if (!n)
+   size_t src_len = strlen(in);
+   if (len)
    {
-      if (size) *dest = '\0';
-      while (*source++) src_size++;
+      size_t cpy_len = src_len < len - 1 ? src_len : len - 1;
+      memcpy(s, in, cpy_len);
+      s[cpy_len] = '\0';
    }
-
-   return src_size;
+   return src_len;
 }
 
-size_t strlcat(char *dest, const char *source, size_t size)
+/* NOTE: When 'len' is smaller than strlen(s), the return value is
+ * strlen(s) + strlen(source), whereas OpenBSD returns
+ * len + strlen(source). No bytes are written in either case, and the
+ * usual 'return value >= len means truncated' test holds for both,
+ * so this only matters to callers that use the return value as an
+ * exact required-buffer-size figure. */
+size_t strlcat(char *s, const char *source, size_t len)
 {
-   size_t len = strlen(dest);
-
-   dest += len;
-
-   if (len > size)
-      size = 0;
+   size_t dst_len = strlen(s);
+   s += dst_len;
+   if (dst_len > len)
+      len = 0;
    else
-      size -= len;
-
-   return len + strlcpy(dest, source, size);
+      len -= dst_len;
+   return dst_len + strlcpy(s, source, len);
 }
 #endif
