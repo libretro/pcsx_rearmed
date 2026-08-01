@@ -425,6 +425,7 @@ ifeq "$(PLATFORM)" "libretro"
 ifneq "$(HAVE_PHYSICAL_CDROM)$(USE_LIBRETRO_VFS)" "00"
 OBJS += deps/libretro-common/compat/compat_strl.o
 OBJS += deps/libretro-common/file/file_path.o
+OBJS += deps/libretro-common/file/file_path_io.o
 OBJS += deps/libretro-common/string/stdstring.o
 OBJS += deps/libretro-common/vfs/vfs_implementation.o
 endif
