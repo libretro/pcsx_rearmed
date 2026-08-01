@@ -148,6 +148,7 @@ typedef struct {
 		boolean f1;
 		boolean alt_flip;
 		boolean drc_no_thread;
+		boolean needs_interlace;
 	} hacks;
 } PcsxConfig;
 
