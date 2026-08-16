@@ -2391,7 +2391,7 @@ static void psxBios_WaitEvent() { // 0a
 	pc0 -= 4;
 	if ((s32)(psxRegs.next_interupt - psxRegs.cycle) > 0)
 		psxRegs.cycle = psxRegs.next_interupt;
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 static void psxBios_TestEvent() { // 0b
@@ -2625,7 +2625,7 @@ static void psxBios_ReturnFromException() { // 17
 	MTC0(&psxRegs, 12, sr);
 
 	use_cycles(53);
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 void psxBios_ResetEntryInt() { // 18
@@ -4549,7 +4549,7 @@ static void hleDummy() {
 	psxRegs.pc = ra;
 	psxRegs.cycle += 1000;
 
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 static void hleA0() {
@@ -4568,7 +4568,7 @@ static void hleA0() {
 		biosA0[call]();
 
 	//printf("A(%02x) -> %x\n", call, v0);
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 static void hleB0() {
@@ -4592,7 +4592,7 @@ static void hleB0() {
 		biosB0[call]();
 
 	//printf("B(%02x) -> %x\n", call, v0);
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 static void hleC0() {
@@ -4611,7 +4611,7 @@ static void hleC0() {
 		biosC0[call]();
 
 	//printf("C(%02x) -> %x\n", call, v0);
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 static void hleA0t() {
@@ -4624,7 +4624,7 @@ static void hleA0t() {
 		biosA0[call]();
 
 	//printf("A(%02x) -> %x\n", call, v0);
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 static void hleB0t() {
@@ -4639,7 +4639,7 @@ static void hleB0t() {
 		biosB0[call]();
 
 	//printf("B(%02x) -> %x\n", call, v0);
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 static void hleC0t() {
@@ -4652,7 +4652,7 @@ static void hleC0t() {
 		biosC0[call]();
 
 	//printf("C(%02x) -> %x\n", call, v0);
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 // currently not used
