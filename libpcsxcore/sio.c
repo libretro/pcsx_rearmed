@@ -127,14 +127,17 @@ void sioWrite8(unsigned char value) {
 			else padst = 0;
 			return;
 		case 2:
-			parp++;
+			if (parp < 255)
+				parp++;
 			switch (ctrl & 0x2002) {
 				case 0x0002: buf[parp] = PAD1_poll(value, &more_data); break;
 				case 0x2002: buf[parp] = PAD2_poll(value, &more_data); break;
 			}
 
-			if (more_data) {
+			if (more_data)
 				bufcount = parp + 1;
+			if (((ctrl & CTRL_ACK_IRQ) && more_data) ||
+			     (ctrl & CTRL_RX_IRQ)) {
 				set_event(PSXINT_SIO, SIO_CYCLES);
 			}
 			return;
@@ -252,9 +255,6 @@ void sioWrite8(unsigned char value) {
 			bufcount = 0;
 			return;
 	}
-}
-
-void sioWriteStat16(unsigned short value) {
 }
 
 void sioWriteMode16(unsigned short value) {

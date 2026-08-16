@@ -39,7 +39,6 @@ extern unsigned char McdDisable[2];
 extern unsigned char McdFlag[2];
 
 void sioWrite8(unsigned char value);
-void sioWriteStat16(unsigned short value);
 void sioWriteMode16(unsigned short value);
 void sioWriteCtrl16(unsigned short value);
 
