@@ -74,14 +74,13 @@ extern "C" {
 }
 
 void psxHwReset();
-u8 psxHwRead8(u32 add);
-u16 psxHwRead16(u32 add);
-u32 psxHwRead32(u32 add);
-void psxHwWrite8(u32 add, u32 value);
-void psxHwWrite16(u32 add, u32 value);
-void psxHwWrite32(u32 add, u32 value);
-u32 sio1ReadStat16(void);
-int psxHwFreeze(void *f, int Mode);
+u8   psxHwRead8(psxRegisters *regs, u32 add);
+u16  psxHwRead16(psxRegisters *regs, u32 add);
+u32  psxHwRead32(psxRegisters *regs, u32 add);
+void psxHwWrite8(psxRegisters *regs, u32 add, u32 value);
+void psxHwWrite16(psxRegisters *regs, u32 add, u32 value);
+void psxHwWrite32(psxRegisters *regs, u32 add, u32 value);
+int  psxHwFreeze(void *f, int Mode);
 
 void psxHwWriteIstat(u32 value);
 void psxHwWriteImask(u32 value);

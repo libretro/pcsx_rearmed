@@ -67,13 +67,23 @@ extern "C" {
 #define psxMu16ref(mem)	(*(u16 *)&psxRegs.ptrs.psxM[(mem) & 0x1fffff])
 #define psxMu32ref(mem)	(*(u32 *)&psxRegs.ptrs.psxM[(mem) & 0x1fffff])
 
-#define psxHu8(mem)		(*(u8 *)&psxRegs.ptrs.psxH[(mem) & 0xffff])
-#define psxHu16(mem)	(SWAP16(*(u16 *)&psxRegs.ptrs.psxH[(mem) & 0xffff]))
-#define psxHu32(mem)	(SWAP32(*(u32 *)&psxRegs.ptrs.psxH[(mem) & 0xffff]))
+#define psxHptr_(regs, mem)    &(regs)->ptrs.psxH[(mem) & 0xffff]
 
-#define psxHu8ref(mem)	(*(u8  *)&psxRegs.ptrs.psxH[(mem) & 0xffff])
-#define psxHu16ref(mem)	(*(u16 *)&psxRegs.ptrs.psxH[(mem) & 0xffff])
-#define psxHu32ref(mem)	(*(u32 *)&psxRegs.ptrs.psxH[(mem) & 0xffff])
+#define psxHu8ref_(regs, mem)   *(u8 *)psxHptr_(regs, mem)
+#define psxHu16ref_(regs, mem) *(u16 *)psxHptr_(regs, mem)
+#define psxHu32ref_(regs, mem) *(u32 *)psxHptr_(regs, mem)
+
+#define psxHu8_(regs,  mem)           psxHu8ref_(regs,  mem)
+#define psxHu16_(regs, mem)    SWAP16(psxHu16ref_(regs, mem))
+#define psxHu32_(regs, mem)    SWAP32(psxHu32ref_(regs, mem))
+
+#define psxHu8(mem)            psxHu8_(&psxRegs, mem)
+#define psxHu16(mem)           psxHu16_(&psxRegs, mem)
+#define psxHu32(mem)           psxHu32_(&psxRegs, mem)
+
+#define psxHu8ref(mem)         psxHu8ref_(&psxRegs, mem)
+#define psxHu16ref(mem)        psxHu16ref_(&psxRegs, mem)
+#define psxHu32ref(mem)        psxHu32ref_(&psxRegs, mem)
 
 extern int cache_isolated;
 

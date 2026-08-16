@@ -115,34 +115,6 @@ index 1e2d01f6..0ee15974 100644
  }
  
  void gen_interupt(psxCP0Regs *cp0)
-diff --git a/libpcsxcore/psxhw.c b/libpcsxcore/psxhw.c
-index eadcb076..cd5e7ae1 100644
---- a/libpcsxcore/psxhw.c
-+++ b/libpcsxcore/psxhw.c
-@@ -331,6 +331,7 @@ void psxHwWrite8(u32 add, u32 value) {
- 			log_unhandled("unhandled w8  %08x %08x @%08x\n",
- 				add, value, psxRegs.pc);
- 	}
-+	if (add < 0x1f802000)
- 	psxHu8(add) = value;
- }
- 
-@@ -404,6 +405,7 @@ void psxHwWrite16(u32 add, u32 value) {
- 			log_unhandled("unhandled w16 %08x %08x @%08x\n",
- 				add, value, psxRegs.pc);
- 	}
-+	if (add < 0x1f802000)
- 	psxHu16ref(add) = SWAPu16(value);
- }
- 
-@@ -465,6 +467,7 @@ void psxHwWrite32(u32 add, u32 value) {
- 			return;
- 		}
- 	}
-+	if (add < 0x1f802000)
- 	psxHu32ref(add) = SWAPu32(value);
- }
- 
 diff --git a/libpcsxcore/psxinterpreter.c b/libpcsxcore/psxinterpreter.c
 index 55bf2d41..fdef7405 100644
 --- a/libpcsxcore/psxinterpreter.c

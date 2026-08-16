@@ -42,13 +42,9 @@ void sioWrite8(unsigned char value);
 void sioWriteStat16(unsigned short value);
 void sioWriteMode16(unsigned short value);
 void sioWriteCtrl16(unsigned short value);
-void sioWriteBaud16(unsigned short value);
 
 unsigned char sioRead8();
-unsigned short sioReadStat16();
-unsigned short sioReadMode16();
-unsigned short sioReadCtrl16();
-unsigned short sioReadBaud16();
+unsigned short sioReadStat16(); // debug
 
 void sioReset();
 void sioInterrupt();

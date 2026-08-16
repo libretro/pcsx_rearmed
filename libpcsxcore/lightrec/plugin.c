@@ -126,7 +126,7 @@ static void hw_write_byte(struct lightrec_state *state,
 {
 	lightrec_tansition_to_pcsx(state);
 
-	psxHwWrite8(mem, val);
+	psxHwWrite8(&psxRegs, mem, val);
 
 	lightrec_tansition_from_pcsx(state);
 }
@@ -136,7 +136,7 @@ static void hw_write_half(struct lightrec_state *state,
 {
 	lightrec_tansition_to_pcsx(state);
 
-	psxHwWrite16(mem, val);
+	psxHwWrite16(&psxRegs, mem, val);
 
 	lightrec_tansition_from_pcsx(state);
 }
@@ -146,7 +146,7 @@ static void hw_write_word(struct lightrec_state *state,
 {
 	lightrec_tansition_to_pcsx(state);
 
-	psxHwWrite32(mem, val);
+	psxHwWrite32(&psxRegs, mem, val);
 
 	lightrec_tansition_from_pcsx(state);
 }
@@ -157,7 +157,7 @@ static u8 hw_read_byte(struct lightrec_state *state, u32 op, void *host, u32 mem
 
 	lightrec_tansition_to_pcsx(state);
 
-	val = psxHwRead8(mem);
+	val = psxHwRead8(&psxRegs, mem);
 
 	lightrec_tansition_from_pcsx(state);
 
@@ -171,7 +171,7 @@ static u16 hw_read_half(struct lightrec_state *state,
 
 	lightrec_tansition_to_pcsx(state);
 
-	val = psxHwRead16(mem);
+	val = psxHwRead16(&psxRegs, mem);
 
 	lightrec_tansition_from_pcsx(state);
 
@@ -186,7 +186,7 @@ static u32 hw_read_word(struct lightrec_state *state,
 
 	lightrec_tansition_to_pcsx(state);
 
-	val = psxHwRead32(mem);
+	val = psxHwRead32(&psxRegs, mem);
 
 	if (GPUSTATUS_POLLING_THRESHOLD > 0 && mem == 0x1f801814) {
 		diff = psxRegs.cycle - old_cycle;
@@ -196,7 +196,7 @@ static u32 hw_read_word(struct lightrec_state *state,
 		    && diff == old_cycle - oldold_cycle) {
 			while (psxRegs.next_interupt > psxRegs.cycle && val == old_gpusr) {
 				psxRegs.cycle += diff;
-				val = psxHwRead32(mem);
+				val = psxHwRead32(&psxRegs, mem);
 			}
 		}
 

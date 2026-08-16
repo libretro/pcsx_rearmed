@@ -364,7 +364,7 @@ u8 psxMemRead8(psxRegisters *regs, u32 mem) {
 		if ((mem & 0xffff) < 0x400)
 			return regs->ptrs.psxH[mem & 0x3ff];
 		else
-			return psxHwRead8(mem);
+			return psxHwRead8(regs, mem);
 	}
 	return 0xFF;
 }
@@ -381,7 +381,7 @@ u16 psxMemRead16(psxRegisters *regs, u32 mem) {
 		if ((mem & 0xffff) < 0x400)
 			return SWAPu16(*(u16 *)(regs->ptrs.psxH + (mem & 0x3fe)));
 		else
-			return psxHwRead16(mem);
+			return psxHwRead16(regs, mem);
 	}
 	return 0xFFFF;
 }
@@ -398,7 +398,7 @@ u32 psxMemRead32(psxRegisters *regs, u32 mem) {
 		if ((mem & 0xffff) < 0x400)
 			return SWAPu32(*(u32 *)(regs->ptrs.psxH + (mem & 0x3fc)));
 		else
-			return psxHwRead32(mem);
+			return psxHwRead32(regs, mem);
 	}
 	if (mem == 0xfffe0130)
 		return regs->biuReg;
@@ -422,7 +422,7 @@ void psxMemWrite8(psxRegisters *regs, u32 mem, u32 value) {
 		if ((mem & 0xffff) < 0x400)
 			regs->ptrs.psxH[mem & 0x3ff] = value;
 		else
-			psxHwWrite8(mem, value);
+			psxHwWrite8(regs, mem, value);
 		return;
 	}
 	log_unhandled("unhandled w8  %08x %08x @%08x\n", mem, value, regs->pc);
@@ -445,7 +445,7 @@ void psxMemWrite16(psxRegisters *regs, u32 mem, u32 value) {
 		if ((mem & 0xffff) < 0x400)
 			*(u16 *)(regs->ptrs.psxH + (mem & 0x3fe)) = SWAPu16(value);
 		else
-			psxHwWrite16(mem, value);
+			psxHwWrite16(regs, mem, value);
 		return;
 	}
 	log_unhandled("unhandled w16 %08x %08x @%08x\n", mem, value, regs->pc);
@@ -468,7 +468,7 @@ void psxMemWrite32(psxRegisters *regs, u32 mem, u32 value) {
 		if ((mem & 0xffff) < 0x400)
 			*(u32 *)(regs->ptrs.psxH + (mem & 0x3fc)) = SWAPu32(value);
 		else
-			psxHwWrite32(mem, value);
+			psxHwWrite32(regs, mem, value);
 		return;
 	}
 	if (mem == 0xfffe0130) {

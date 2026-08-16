@@ -1538,7 +1538,6 @@ static const struct {
   FUNCNAME(new_dyna_leave),
   FUNCNAME(pcsx_mtc0),
   FUNCNAME(pcsx_mtc0_ds),
-  FUNCNAME(sio1ReadStat16),
   FUNCNAME(psxHwReadGpuSR),
   FUNCNAME(cdrRead0),
   FUNCNAME(cdrRead1),
