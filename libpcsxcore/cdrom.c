@@ -1175,7 +1175,9 @@ void cdrInterrupt(void) {
 
 		case CdlTest:
 		case CdlTest + CMD_WHILE_NOT_READY:
+			CDR_LOG_I("CdlTest %02x\n", cdr.Param[0]);
 			switch (cdr.Param[0]) {
+				u16 addr;
 				case 0x20: // System Controller ROM Version
 					SetResultSize_(4);
 					memcpy(cdr.Result, Test20, 4);
@@ -1187,6 +1189,17 @@ void cdrInterrupt(void) {
 				case 0x23: case 0x24:
 					SetResultSize_(8);
 					memcpy(cdr.Result, Test23, 4);
+					break;
+				case 0x60:
+					addr = ((u16)cdr.Param[2] << 8) | cdr.Param[1];
+					SetResultSize_(1);
+					cdr.Result[0] = 0;
+					if (addr == 0x050) { // subq ADR/Control
+						cdr.Result[0] = 1;
+						if (cdr_stat.Type == CDRT_DATA)
+							cdr.Result[0] |= 0x40;
+					}
+					CDR_LOG_I("ram read: %04x %02x\n", addr, cdr.Result[0]);
 					break;
 			}
 			break;
@@ -1202,7 +1215,8 @@ void cdrInterrupt(void) {
 			cdr.Result[2] = 0;
 			cdr.Result[3] = 0;
 
-			// 0x10 - audio | 0x40 - disk missing | 0x80 - unlicensed
+			// [1]: 0x10 - audio | 0x40 - disk missing | 0x80 - unlicensed
+			// [2]: TOC Disk Type Byte (00=CD-DA or CD-ROM, 20=CD-ROM-XA)
 			if (cdra_getStatus(&cdr_stat) != 0 ||
 			    cdr_stat.Type == CDRT_UNKNOWN || cdr_stat.Type == 0xff) {
 				cdr.Result[1] = 0xc0;
@@ -1212,6 +1226,8 @@ void cdrInterrupt(void) {
 					cdr.Result[1] |= 0x10;
 				if (CdromId[0] == '\0')
 					cdr.Result[1] |= 0x80;
+				else if (strcmp(CdromId, "SLUS99999") != 0)
+					cdr.Result[2] = 0x20;
 			}
 			cdr.Result[0] |= (cdr.Result[1] >> 4) & 0x08;
 			CDR_LOG_I("CdlID: %02x %02x %02x %02x\n", cdr.Result[0],
