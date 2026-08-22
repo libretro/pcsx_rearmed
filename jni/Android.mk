@@ -80,7 +80,7 @@ SOURCES_C += $(FRONTEND_DIR)/main.c \
 
 # libchdr
 LCHDR = $(DEPS_DIR)/libchdr
-LCHDR_LZMA = $(LCHDR)/deps/lzma-25.01
+LCHDR_LZMA = $(LCHDR)/deps/lzma-26.02
 LCHDR_ZSTD = $(LCHDR)/deps/zstd-1.5.7
 SOURCES_C += \
 	     $(LCHDR)/src/libchdr_bitstream.c \
