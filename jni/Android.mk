@@ -80,37 +80,30 @@ SOURCES_C += $(FRONTEND_DIR)/main.c \
 
 # libchdr
 LCHDR = $(DEPS_DIR)/libchdr
-LCHDR_LZMA = $(LCHDR)/deps/lzma-24.05
-LCHDR_ZSTD = $(LCHDR)/deps/zstd-1.5.6/lib
+LCHDR_LZMA = $(LCHDR)/deps/lzma-25.01
+LCHDR_ZSTD = $(LCHDR)/deps/zstd-1.5.7
 SOURCES_C += \
 	     $(LCHDR)/src/libchdr_bitstream.c \
 	     $(LCHDR)/src/libchdr_cdrom.c \
 	     $(LCHDR)/src/libchdr_chd.c \
+	     $(LCHDR)/src/libchdr_codec_cdfl.c \
+	     $(LCHDR)/src/libchdr_codec_cdlz.c \
+	     $(LCHDR)/src/libchdr_codec_cdzl.c \
+	     $(LCHDR)/src/libchdr_codec_cdzs.c \
+	     $(LCHDR)/src/libchdr_codec_flac.c \
+	     $(LCHDR)/src/libchdr_codec_huff.c \
+	     $(LCHDR)/src/libchdr_codec_lzma.c \
+	     $(LCHDR)/src/libchdr_codec_zlib.c \
+	     $(LCHDR)/src/libchdr_codec_zstd.c \
 	     $(LCHDR)/src/libchdr_flac.c \
 	     $(LCHDR)/src/libchdr_huffman.c \
-	     $(LCHDR_LZMA)/src/Alloc.c \
-	     $(LCHDR_LZMA)/src/CpuArch.c \
-	     $(LCHDR_LZMA)/src/Delta.c \
-	     $(LCHDR_LZMA)/src/LzFind.c \
 	     $(LCHDR_LZMA)/src/LzmaDec.c \
-	     $(LCHDR_LZMA)/src/LzmaEnc.c \
-	     $(LCHDR_LZMA)/src/Sort.c \
-	     $(LCHDR_ZSTD)/common/entropy_common.c \
-	     $(LCHDR_ZSTD)/common/error_private.c \
-	     $(LCHDR_ZSTD)/common/fse_decompress.c \
-	     $(LCHDR_ZSTD)/common/xxhash.c \
-	     $(LCHDR_ZSTD)/common/zstd_common.c \
-	     $(LCHDR_ZSTD)/decompress/huf_decompress.c \
-	     $(LCHDR_ZSTD)/decompress/zstd_ddict.c \
-	     $(LCHDR_ZSTD)/decompress/zstd_decompress_block.c \
-	     $(LCHDR_ZSTD)/decompress/zstd_decompress.c
+	     $(LCHDR_ZSTD)/zstddeclib.c
 EXTRA_INCLUDES += $(LCHDR)/include $(LCHDR_LZMA)/include $(LCHDR_ZSTD)
-COREFLAGS += -DHAVE_CHD -DZ7_ST -DZSTD_DISABLE_ASM
-ifeq (,$(call gte,$(APP_PLATFORM_LEVEL),18))
-ifneq ($(TARGET_ARCH_ABI),arm64-v8a)
-# HACK
-COREFLAGS += -Dgetauxval=0*
-endif
+COREFLAGS += -DHAVE_CHD -DCHDR_SYSTEM_ZLIB
+ifeq ($(TARGET_ARCH_ABI),arm64-v8a)
+SOURCES_ASM += $(LCHDR_LZMA)/Asm/arm64/LzmaDecOpt.S
+COREFLAGS += -DZ7_LZMA_DEC_OPT
 endif
 
 COREFLAGS += -ffast-math -DHAVE_LIBRETRO -DNO_FRONTEND -DANDROID -DREARMED

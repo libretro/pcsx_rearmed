@@ -427,7 +427,7 @@ int LoadSBI(const char *fname, int sector_count) {
 
 end:
 	if (!clean_eof)
-		SysPrintf(_("SBI: parse failure at 0x%lx\n"), ftell(sbihandle));
+		SysPrintf(_("SBI: parse failure at 0x%lx\n"), (long)ftell(sbihandle));
 	if (!good_sectors) {
 		free(sbi_sectors);
 		sbi_sectors = NULL;

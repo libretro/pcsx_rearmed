@@ -18,9 +18,6 @@
  *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.          *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE // gettid
-#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -470,11 +467,14 @@ static void emit_far_call(const void *f);
 // perf record -k CLOCK_MONOTONIC ...
 // perf inject --jit --input perf.data --output perf.jit.data
 #if defined(__linux__) && !defined(ANDROID) && !defined(TC_WRITE_OFFSET) && \
-    defined(__GLIBC_MINOR__) && __GLIBC_MINOR__ >= 30
+    !defined(NO_DYLIB)
 #include <time.h>
 #include <elf.h>
+#include <dlfcn.h>
 static FILE *perf_dump;
 static int perf_use_map;
+static pid_t (*p_gettid)(void);
+static int (*p_clock_gettime)(clockid_t clockid, struct timespec *tp);
 
 struct perf_dump_hdr
 {
@@ -516,7 +516,7 @@ static uint64_t perf_dump_tstamp(void)
 {
   struct timespec ts;
   uint64_t ret = 0;
-  if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+  if (p_clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
     ret = ts.tv_sec * 1000000000ll + ts.tv_nsec;
   return ret;
 }
@@ -536,6 +536,12 @@ static void perf_dump_init(void)
   pid_t pid;
   if (likely(!getenv("PCSXR_JIT_DUMP") && !(perf_use_map = !!getenv("PCSXR_PERF_MAP"))))
     return;
+  p_gettid = dlsym(NULL, "gettid"); // RTLD_DEFAULT=NULL
+  p_clock_gettime = dlsym(NULL, "clock_gettime");
+  if (!perf_use_map && (!p_gettid || !p_clock_gettime)) {
+    fprintf(stderr, "perf_dump: missing funcs %p %p\n", p_gettid, p_clock_gettime);
+    return;
+  }
   pid = getpid();
   // filenames must be exactly this
   snprintf(fname, sizeof(fname), perf_use_map ?
@@ -616,7 +622,7 @@ static noinline void perf_dump_write_(const struct compile_state *st,
 
   // JIT_CODE_LOAD:
   rec.pid = (uint32_t)getpid();
-  rec.tid = (uint32_t)gettid();
+  rec.tid = (uint32_t)p_gettid();
   rec.vma = rec.code_addr = (size_t)start;
   rec.code_size = end - start;
   rec.code_index = code_index++;
@@ -3566,8 +3572,6 @@ static void loadlr_assemble(struct compile_state *st, int i,
 
 static void do_invstub(struct compile_state *st, int n)
 {
-  literal_pool(20);
-  assem_debug("do_invstub %x\n", st->start + stubs[n].e*4);
   u_int reglist = stubs[n].a;
   u_int addrr = stubs[n].b;
   int ofs_start = stubs[n].c;
@@ -3575,6 +3579,8 @@ static void do_invstub(struct compile_state *st, int n)
   int len = ofs_end - ofs_start;
   u_int rightr = 0;
 
+  literal_pool(20);
+  assem_debug("do_invstub %x\n", st->start + stubs[n].e*4);
   set_jump_target(stubs[n].addr, out);
   save_regs(reglist);
   if (addrr != 0 || ofs_start != 0)
@@ -4356,36 +4362,32 @@ static void cop2_assemble(struct compile_state *st, int i, const struct regstat 
 
 static void do_readstub(struct compile_state *st, int n)
 {
-  assem_debug("do_readstub %x\n", st->start + stubs[n].a*4);
-  set_jump_target(stubs[n].addr, out);
   int i = stubs[n].a;
   int rs = stubs[n].b;
   const struct regstat *i_regs = (void *)stubs[n].c;
   int adj = (int)stubs[n].d;
   u_int reglist = stubs[n].e;
   literal_pool(256);
+  assem_debug("do_readstub %x\n", st->start + i*4);
+  set_jump_target(stubs[n].addr, out);
   do_read_slow(st, i, i_regs, stubs[n].type, stubs[n].retaddr, rs, adj, reglist);
 }
 
 static void do_writestub(struct compile_state *st, int n)
 {
-  assem_debug("do_writestub %x\n", st->start + stubs[n].a*4);
-  set_jump_target(stubs[n].addr, out);
   int i = stubs[n].a;
   int rs = stubs[n].b;
   struct regstat *i_regs = (struct regstat *)stubs[n].c;
   int adj = stubs[n].d;
   u_int reglist = stubs[n].e;
   literal_pool(256);
+  assem_debug("do_writestub %x\n", st->start + i*4);
+  set_jump_target(stubs[n].addr, out);
   do_write_slow(st, i, i_regs, stubs[n].type, stubs[n].retaddr, rs, adj, reglist, 0);
 }
 
 static void do_unalignedwritestub(struct compile_state *st, int n)
 {
-  assem_debug("do_unalignedwritestub %x\n",st->start+stubs[n].a*4);
-  literal_pool(256);
-  set_jump_target(stubs[n].addr, out);
-
   int i=stubs[n].a;
   struct regstat *i_regs=(struct regstat *)stubs[n].c;
   int addr=stubs[n].b;
@@ -4399,6 +4401,10 @@ static void do_unalignedwritestub(struct compile_state *st, int n)
   assert(dops[i].opcode==0x2a||dops[i].opcode==0x2e); // SWL/SWR only implemented
   reglist|=(1<<addr);
   reglist&=~(1<<temp2);
+
+  literal_pool(256);
+  assem_debug("do_unalignedwritestub %x\n",st->start + i*4);
+  set_jump_target(stubs[n].addr, out);
 
   // don't bother with it and call write handler
   save_regs(reglist);
@@ -4419,11 +4425,11 @@ static void do_unalignedwritestub(struct compile_state *st, int n)
 
 static void do_overflowstub(struct compile_state *st, int n)
 {
-  assem_debug("do_overflowstub %x\n", st->start + (u_int)stubs[n].a * 4);
-  literal_pool(24);
   int i = stubs[n].a;
   struct regstat *i_regs = (struct regstat *)stubs[n].c;
   int ccadj = stubs[n].d;
+  literal_pool(24);
+  assem_debug("do_overflowstub %x\n", st->start + i*4);
   set_jump_target(stubs[n].addr, out);
   wb_dirtys(regs[i].regmap, regs[i].dirty);
   exception_assemble(st, i, i_regs, ccadj);
@@ -4431,14 +4437,14 @@ static void do_overflowstub(struct compile_state *st, int n)
 
 static void do_alignmentstub(struct compile_state *st, int n)
 {
-  assem_debug("do_alignmentstub %x\n", st->start + (u_int)stubs[n].a * 4);
-  literal_pool(24);
   int i = stubs[n].a;
   struct regstat *i_regs = (struct regstat *)stubs[n].c;
   int ccadj = stubs[n].d;
   int is_store = dops[i].itype == STORE || dops[i].opcode == 0x3A; // SWC2
   int cause = (dops[i].opcode & 3) << 28;
   cause |= is_store ? (R3000E_AdES << 2) : (R3000E_AdEL << 2);
+  literal_pool(24);
+  assem_debug("do_alignmentstub %x\n", st->start + i*4);
   set_jump_target(stubs[n].addr, out);
   wb_dirtys(regs[i].regmap, regs[i].dirty);
   if (stubs[n].b != 1)
@@ -5450,11 +5456,11 @@ static void do_cc(struct compile_state *st, int i, const signed char i_regmap[],
 
 static void do_ccstub(struct compile_state *st, int n)
 {
-  literal_pool(256);
-  assem_debug("do_ccstub %x\n",st->start+(u_int)stubs[n].b*4);
-  set_jump_target(stubs[n].addr, out);
   int i = stubs[n].b;
   int r_pc = -1;
+  literal_pool(256);
+  assem_debug("do_ccstub %x\n",st->start + i*4);
+  set_jump_target(stubs[n].addr, out);
   if (stubs[n].d != TAKEN) {
     wb_dirtys(branch_regs[i].regmap,branch_regs[i].dirty);
   }

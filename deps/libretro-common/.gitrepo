@@ -6,7 +6,7 @@
 [subrepo]
 	remote = https://github.com/libretro/libretro-common.git
 	branch = master
-	commit = 737806765a4aca9255de9a4854e4257b5ffa0fe4
-	parent = 706346ac4001aa4e3660f7988cfa3b75ee88752a
+	commit = 692124dbd8a0b2f5526b48f3bc2026421754e3c5
+	parent = 7bc3fd1938dfd77f8a5191443d99c8539c695f64
 	method = merge
-	cmdver = 0.4.3
+	cmdver = 0.4.9

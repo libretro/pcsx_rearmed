@@ -20,7 +20,7 @@
 #include <unistd.h>
 #include <sys/syscall.h>
 #endif
-#include <zlib.h>
+#include "zlib_wrapper.h"
 
 #include "retro_miscellaneous.h"
 #ifdef SWITCH
@@ -127,6 +127,7 @@ static bool show_advanced_gpu_peops_settings = true;
 #ifdef GPU_UNAI
 static bool show_advanced_gpu_unai_settings = true;
 #endif
+static bool show_info_notifications = true;
 static float mouse_sensitivity = 1.0f;
 static unsigned int disk_current_index;
 
@@ -1332,6 +1333,10 @@ static void save_close(void *file)
    free(fp);
 }
 
+struct PcsxSaveFuncs SaveFuncs = {
+	save_open, save_read, save_write, save_seek, save_close
+};
+
 bool retro_serialize(void *data, size_t size)
 {
    int ret;
@@ -1900,6 +1905,46 @@ static int get_bool_variable(const char *key)
    return 0;
 }
 
+static void show_enabled_hacks(void)
+{
+   char msg[256], *p = msg;
+   int count = 0;
+
+   snprintf(p, sizeof(msg) - (p - msg), "Enabled hacks: ");
+   p += strlen(p);
+   if (Config.TurboCD) {
+      snprintf(p, sizeof(msg) - (p - msg), "TurboCD");
+      p += strlen(p);
+      count++;
+   }
+   if (pl_rearmed_cbs.gpu_neon.enhancement_enable &&
+         pl_rearmed_cbs.gpu_neon.enhancement_no_main) {
+      snprintf(p, sizeof(msg) - (p - msg), "%s%s", count ? ", " : "",
+            "Enh. Res. Speed Hack");
+      p += strlen(p);
+      count++;
+   }
+   if (Config.cycle_multiplier != CYCLE_MULT_DEFAULT) {
+      snprintf(p, sizeof(msg) - (p - msg), "%s%s%d", count ? ", " : "", "PSX CPU Clock",
+            Config.cycle_multiplier > 0 ? 10000 / Config.cycle_multiplier : 0);
+      p += strlen(p);
+      count++;
+   }
+#if !defined(DRC_DISABLE) && !defined(LIGHTREC)
+   if (ndrc_g.hacks & (NDHACK_NO_SMC_CHECK|NDHACK_GTE_UNNEEDED|NDHACK_GTE_NO_FLAGS)) {
+      snprintf(p, sizeof(msg) - (p - msg), "%s%s", count ? ", " : "",
+            "DRC Hacks");
+      p += strlen(p);
+      count++;
+   }
+#endif
+   if (count) {
+      LogWarn("%s\n", msg);
+      if (show_info_notifications)
+         show_notification(msg, 1600, 2, RETRO_LOG_INFO);
+   }
+}
+
 bool retro_load_game(const struct retro_game_info *info)
 {
    size_t i;
@@ -2153,17 +2198,16 @@ bool retro_load_game(const struct retro_game_info *info)
       show_notification("LibCrypt protected game with missing SBI detected",
             3000, 3, RETRO_LOG_WARN);
    }
-   if (Config.SlowBoot)
+   if (Config.SlowBoot && show_info_notifications)
    {
       char buf[16+64];
       if (Config.PsxRegion < ARRAY_SIZE(Config.Bios) && Config.Bios[Config.PsxRegion][0]) {
          snprintf(buf, sizeof(buf), "Booting BIOS: %s", Config.Bios[Config.PsxRegion]);
-         show_message(buf, 800, 2, RETRO_LOG_INFO, RETRO_MESSAGE_TARGET_OSD,
+         show_message(buf, 1200, 2, RETRO_LOG_INFO, RETRO_MESSAGE_TARGET_OSD,
                RETRO_MESSAGE_TYPE_PROGRESS);
       }
    }
-   if (Config.TurboCD)
-      show_notification("TurboCD is ON", 700, 2, RETRO_LOG_INFO);
+   show_enabled_hacks();
 
    return true;
 }
@@ -2450,6 +2494,8 @@ static void update_variables(bool in_flight)
       else
          display_internal_fps = 0;
    }
+
+   show_info_notifications = get_bool_variable("pcsx_rearmed_display_info");
 
    var.value = NULL;
    var.key = "pcsx_rearmed_cd_turbo";
@@ -3933,12 +3979,6 @@ void retro_init(void)
       rumble_cb = rumble.set_rumble_state;
 
    pl_rearmed_cbs.gpu_peops.dwActFixes = GPU_PEOPS_OLD_FRAME_SKIP;
-
-   SaveFuncs.open = save_open;
-   SaveFuncs.read = save_read;
-   SaveFuncs.write = save_write;
-   SaveFuncs.seek = save_seek;
-   SaveFuncs.close = save_close;
 
    if (environ_cb(RETRO_ENVIRONMENT_GET_INPUT_BITMASKS, NULL))
       libretro_supports_bitmasks = true;

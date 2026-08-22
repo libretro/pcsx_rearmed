@@ -77,12 +77,15 @@ struct rearmed_cbs {
 	unsigned int *gpu_hcnt;
 	unsigned int flip_cnt; // increment manually if not using pl_vout_flip
 	unsigned char only_16bpp; // platform is 16bpp-only
-	unsigned char dithering; // 0 off, 1 on, 2 force
+	unsigned char dithering;  // 0 off, 1 on, 2 force
 	unsigned char scale_hires;
 	unsigned char alt_flip;
-	int   thread_rendering; // -1 auto, 0 off, 1 on
+	unsigned char gpu_caps;   // gpu_plugin_caps
+	unsigned char gpu_hacks;  // gpu_plugin_hacks
+	unsigned char pad[2];
+	int   thread_rendering;   // -1 auto, 0 off, 1 on
 	struct {
-		int   allow_interlace; // 0 off, 1 on, 2 guess
+		int   allow_interlace; // 0 off, 1 on, 2 guess, 3 on_db
 		int   enhancement_enable;
 		int   enhancement_no_main;
 		int   enhancement_tex_adj;
@@ -106,7 +109,6 @@ struct rearmed_cbs {
 		int   iVRamSize, iTexGarbageCollection;
 	} gpu_peopsgl;
 	// misc
-	int gpu_caps;
 	int screen_centering_type;
 	int screen_centering_type_default;
 	int screen_centering_x;
@@ -122,6 +124,10 @@ enum centering_type { C_AUTO = 0, C_INGAME, C_BORDERLESS, C_MANUAL };
 enum gpu_plugin_caps {
 	GPU_CAP_OWNS_DISPLAY = (1 << 0),
 	GPU_CAP_SUPPORTS_2X = (1 << 1),
+};
+
+enum gpu_plugin_hacks {
+	GPU_HACK_NEEDS_INTERLACE = (1 << 0),
 };
 
 // platform hooks

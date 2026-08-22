@@ -114,6 +114,13 @@ static const char * const drc_no_thread_db[] =
 	"SLUS01414",
 };
 
+static const char * const needs_interlace_db[] =
+{
+	/* Worms Pinball */
+	"SLES00483",
+	/* Pro Pinball series games have a different hack... */
+};
+
 #define HACK_ENTRY(var, list) \
 	{ #var, &Config.hacks.var, list, ARRAY_SIZE(list) }
 
@@ -134,6 +141,7 @@ hack_db[] =
 	HACK_ENTRY(f1, f1_hack_db),
 	HACK_ENTRY(alt_flip, alt_flip_db),
 	HACK_ENTRY(drc_no_thread, drc_no_thread_db),
+	HACK_ENTRY(needs_interlace, needs_interlace_db),
 };
 
 static const struct

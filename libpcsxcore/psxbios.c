@@ -41,7 +41,7 @@
 #include "psxinterpreter.h"
 #include "psxevents.h"
 #include "cdrom.h"
-#include <zlib.h>
+#include "zlib_wrapper.h"
 
 #ifndef PSXBIOS_LOG
 //#define PSXBIOS_LOG printf

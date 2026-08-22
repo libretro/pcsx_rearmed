@@ -169,6 +169,9 @@ void plugin_call_rearmed_cbs(void)
 		Config.hacks.gpu_centering ? C_INGAME : C_AUTO;
 	pl_rearmed_cbs.alt_flip = Config.AlternativeFlip > 0 ||
 		(Config.AlternativeFlip < 0 && Config.hacks.alt_flip);
+	pl_rearmed_cbs.gpu_hacks = 0;
+	if (Config.hacks.needs_interlace)
+		pl_rearmed_cbs.gpu_hacks |= GPU_HACK_NEEDS_INTERLACE;
 
 	rearmed_set_cbs = SysLoadSym(hGPUDriver, "GPUrearmedCallbacks");
 	if (rearmed_set_cbs != NULL)
