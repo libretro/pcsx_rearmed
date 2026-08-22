@@ -339,15 +339,12 @@ void psxMemShutdown() {
 	psxRegs.ptrs.memWLUT = NULL;
 }
 
-int cache_isolated;
-
 void psxMemOnIsolate(int enable)
 {
 	if (!DISABLE_MEM_LUTS) {
 		mapRam(!enable);
 	}
 
-	cache_isolated = enable;
 	psxCpu->Notify(enable ? R3000ACPU_NOTIFY_CACHE_ISOLATED
 			: R3000ACPU_NOTIFY_CACHE_UNISOLATED, NULL);
 }

@@ -85,8 +85,6 @@ extern "C" {
 #define psxHu16ref(mem)        psxHu16ref_(&psxRegs, mem)
 #define psxHu32ref(mem)        psxHu32ref_(&psxRegs, mem)
 
-extern int cache_isolated;
-
 #ifndef DISABLE_MEM_LUTS
 #define DISABLE_MEM_LUTS 0
 #endif
@@ -112,7 +110,7 @@ static inline int psxm_lut(u8 **ret, const psxRegisters *regs, u32 mem, int writ
 		mem &= ~0x80000000;
 
 	if (mem < 0x800000u) {
-		if (write && cache_isolated)
+		if (write && (regs->CP0.n.SR & (1u << 16))) // cacheIsolated
 			return 0;
 
 		*ret = regs->ptrs.psxM + (mem & 0x1fffff);

@@ -361,6 +361,8 @@ static R3000Acpu psxMixedCpu = {
 	NULL /* ApplyConfig */,	NULL /* Shutdown */
 };
 
+#define cacheIsolated(regs) ((regs)->CP0.n.SR & (1u << 16))
+
 static noinline void ari64_execute_threaded_slow(struct psxRegisters *regs,
 	enum blockExecCaller block_caller)
 {
@@ -382,6 +384,8 @@ static noinline void ari64_execute_threaded_slow(struct psxRegisters *regs,
 
 		// drc only stops on taken branches, so avoid useless blocks
 		if (regs->branchSeen == R3000A_BRANCH_NOT_TAKEN)
+			continue;
+		if (!regs->stop && cacheIsolated(regs))
 			continue;
 		if (ndrc_g.thread.busy_addr == ~0u)
 			break;

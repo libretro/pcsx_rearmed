@@ -829,6 +829,7 @@ int SaveState(const char *file) {
 int LoadState(const char *file) {
 	struct misc_save_data *misc = (void *)(psxRegs.ptrs.psxH + 0xf000);
 	u32 biosBranchCheckOld = psxRegs.biosBranchCheck;
+	u32 oldCP0sr = psxRegs.CP0.n.SR;
 	union {
 		// save stack space
 		GPUFreeze_t gpu_hdr;
@@ -949,6 +950,8 @@ int LoadState(const char *file) {
 	events_restore();
 	if (Config.HLE)
 		psxBiosCheckExe(biosBranchCheckOld, 0x60, 1);
+	if ((oldCP0sr ^ psxRegs.CP0.n.SR) & (1u << 16))
+		psxMemOnIsolate((psxRegs.CP0.n.SR >> 16) & 1);
 
 	psxCpu->Notify(R3000ACPU_NOTIFY_AFTER_LOAD_STATE, NULL);
 
