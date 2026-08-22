@@ -112,6 +112,42 @@ uint32_t bitstream_read_offset(struct bitstream* bitstream)
  *-------------------------------------------------
  */
 
+/*-------------------------------------------------
+ *  bitstream_position_bits - exact bit-granular
+ *  read position (unlike bitstream_read_offset,
+ *  which is only meaningful at a byte boundary)
+ *-------------------------------------------------
+ */
+
+uint64_t bitstream_position_bits(struct bitstream* bitstream)
+{
+	return (uint64_t)bitstream->doffset * 8 - (uint64_t)bitstream->bits;
+}
+
+
+/*-------------------------------------------------
+ *  bitstream_seek_bits - reposition to an exact
+ *  bit-granular offset, previously obtained from
+ *  bitstream_position_bits on the same buffer
+ *-------------------------------------------------
+ */
+
+void bitstream_seek_bits(struct bitstream* bitstream, uint64_t bitpos)
+{
+	int rem = (int)(bitpos % 8);
+	bitstream->doffset = (uint32_t)(bitpos / 8);
+	bitstream->bits = 0;
+	bitstream->buffer = 0;
+	if (rem)
+		bitstream_read(bitstream, rem);
+}
+
+
+/*-------------------------------------------------
+ *  flush - flush to the nearest byte
+ *-------------------------------------------------
+ */
+
 uint32_t bitstream_flush(struct bitstream* bitstream)
 {
 	while (bitstream->bits >= 8)

@@ -149,37 +149,48 @@ static void lzma_fast_free(ISzAllocPtr p, void *address)
 
 static uint32_t lzma_compute_aligned_dictionary_size(uint32_t hunkbytes)
 {
-	const unsigned int level = 9;
+	/* MAME's chd_lzma_compressor::configure_properties() (src/lib/util/chdcodec.cpp) uses
+	 * level = 6 and reduceSize = hunkbytes, then calls LzmaEncProps_Normalize(). The decoder
+	 * has no way to read back what the encoder actually used (see MAME's own FIXME comment on
+	 * chd_lzma_decompressor's constructor), so it must independently re-derive the exact same
+	 * dictionary size from hunkbytes alone. Mirror LzmaEncProps_Normalize() and
+	 * LzmaEnc_WriteProperties() from the LZMA SDK verbatim - do not "simplify" this, any
+	 * deviation that yields a *smaller* dictionary than the real encoder used will silently
+	 * corrupt decoded CHDs (dictionary too small to hold the encoder's back-references).
+	 */
+	const unsigned int level = 6;
 	const uint32_t reduceSize = hunkbytes;
 
 	uint32_t dictSize, alignedDictSize;
 
-	/* LzmaEncProps_Normalize */
+	/* LzmaEncProps_Normalize: level-based default dictionary size */
 	dictSize = level <= 4 ?
 		(uint32_t)1 << (level * 2 + 16) :
 		level <= sizeof(size_t) / 2 + 4 ?
 			(uint32_t)1 << (level + 20) :
 			(uint32_t)1 << (sizeof(size_t) / 2 + 24);
 
+	/* LzmaEncProps_Normalize: clamp dictSize down toward reduceSize (hunkbytes), never below
+	 * kReduceMin. This must be MIN(dictSize, ...), not MAX - a MAX here is a no-op that leaves
+	 * dictSize at its full level-based default (67108864 bytes at level 6) regardless of
+	 * hunkbytes, which is the bug this function used to have. Spelled out with the MIN/MAX
+	 * macros rather than manual if-statements on purpose: that's what let the original bug
+	 * hide in the first place. */
 	if (dictSize > reduceSize)
 	{
 		const uint32_t kReduceMin = (uint32_t)1 << 12;
-		const uint32_t max = MIN(kReduceMin, reduceSize);
-
-		dictSize = MAX(max, dictSize);
+		dictSize = MIN(dictSize, MAX(reduceSize, kReduceMin));
 	}
 
-	/* LzmaEnc_SetProps */
-	dictSize = MIN((uint32_t)15 << 28, dictSize); /* kLzmaMaxHistorySize */
-
-	/* LzmaEnc_WriteProperties */
-	/* we write aligned dictionary value to properties for lzma decoder */
+	/* LzmaEnc_WriteProperties: dictionary size actually written to (here, re-derived for) the
+	 * stream properties - rounds up to the nearest representable LZMA dictionary size. */
 	if (dictSize >= ((uint32_t)1 << 21))
 	{
 		const uint32_t kDictMask = ((uint32_t)1 << 20) - 1;
 
 		alignedDictSize = (dictSize + kDictMask) & ~kDictMask;
-		alignedDictSize = MIN(dictSize, alignedDictSize);
+		if (alignedDictSize < dictSize)
+			alignedDictSize = dictSize;
 	}
 	else
 	{

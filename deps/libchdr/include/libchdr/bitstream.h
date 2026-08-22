@@ -39,5 +39,10 @@ uint32_t 			bitstream_peek(struct bitstream* bitstream, int numbits);
 void 				bitstream_remove(struct bitstream* bitstream, int numbits);
 uint32_t 			bitstream_flush(struct bitstream* bitstream);
 
+/* exact bit-granular position/seek, independent of byte alignment - used to
+ * checkpoint/resume mid-stream decode (see LOWRAM_MAP in libchdr_chd.c) */
+uint64_t 			bitstream_position_bits(struct bitstream* bitstream);
+void 				bitstream_seek_bits(struct bitstream* bitstream, uint64_t bitpos);
+
 
 #endif

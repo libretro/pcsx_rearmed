@@ -73,7 +73,7 @@
 #include "../include/libchdr/huffman.h"
 #include "../include/libchdr/macros.h"
 
-#include "../deps/lzma-25.01/include/LzmaDec.h"
+#include "../deps/lzma-26.02/include/LzmaDec.h"
 
 #undef TRUE
 #undef FALSE
@@ -206,6 +206,60 @@ struct _metadata_entry
 	uint8_t					flags;			/* flag bits */
 };
 
+#if LOWRAM_MAP
+/* one v5-map checkpoint: everything needed to resume both decode passes
+ * (pass 1: per-hunk compression-type byte, Huffman+RLE; pass 2: per-hunk
+ * length/offset/crc, fixed-width fields) at hunk `hunknum` without having
+ * decoded any of hunks [0, hunknum). See LOWRAM_MAP in chdconfig.h. */
+typedef struct _v5_map_checkpoint v5_map_checkpoint;
+struct _v5_map_checkpoint
+{
+	uint32_t	hunknum;
+	uint64_t	pass1_bitpos;	/* bit position to resume compression-type decode */
+	uint8_t		lastcomp;		/* pass 1 RLE state */
+	int32_t		repcount;		/* pass 1 RLE state */
+	uint64_t	pass2_bitpos;	/* bit position to resume length/offset/crc decode */
+	uint64_t	curoffset;		/* pass 2 cumulative offset state */
+	uint32_t	last_self;		/* pass 2 COMPRESSION_SELF_0/1 state */
+	uint64_t	last_parent;	/* pass 2 COMPRESSION_PARENT_0/1 state */
+};
+
+/* one cached compressed-map window: the exact byte range covering a single
+ * checkpoint bucket in one of the two decode passes, fetched from the CHD
+ * file on demand and kept only until a lookup needs a different bucket.
+ * Byte range is computed exactly from adjacent checkpoints' bit positions -
+ * no fixed/guessed buffer size, no risk of an undersized window. */
+typedef struct _v5_map_window v5_map_window;
+struct _v5_map_window
+{
+	uint8_t *	data;				/* malloc'd, exactly byte_len long; NULL if nothing cached */
+	uint32_t	byte_start;			/* offset within the compressed blob (relative to mapoffset+16) */
+	uint32_t	byte_len;
+	uint32_t	checkpoint_idx;		/* which checkpoint this window covers; UINT32_MAX if none cached */
+};
+
+/* resident state for lazily re-deriving v5 map entries. Replaces the fully
+ * materialized `header->rawmap` (totalhunks*12 bytes) with a sparse
+ * checkpoint table plus, per lookup, a small on-demand window of the
+ * compressed on-disk map re-read from the file - not the whole blob (which
+ * itself is only ~20-30% of the fully materialized size, but still large:
+ * hundreds of KB on real GD-ROM/UMD discs). See v5_map_get_entry(). */
+typedef struct _v5_lowram_map v5_lowram_map;
+struct _v5_lowram_map
+{
+	uint32_t				mapbytes;
+	uint64_t				firstoffs;
+	uint8_t					lengthbits, selfbits, parentbits;
+	struct huffman_decoder *decoder;		/* compression-type huffman tree, built once */
+	v5_map_checkpoint *		checkpoints;
+	uint32_t				checkpoint_count;
+	uint64_t				pass1_end_bitpos;	/* where pass 1 ends / pass 2 begins in the blob -
+							 * a single fixed point for the whole file, not per-checkpoint */
+	v5_map_window			pass1_window;
+	v5_map_window			pass2_window;
+};
+#endif
+
 /* internal representation of an open CHD file */
 struct _chd_file
 {
@@ -236,6 +290,19 @@ struct _chd_file
 	} codec_data;
 
 	uint8_t *					file_cache;		/* cache of underlying file */
+
+#if LOWRAM_MAP
+	v5_lowram_map				lowram_map;		/* CHDv5 compressed-map lazy-decode state */
+
+	/* CHDv5 can list up to 4 alternate codecs (header.compression[]); chdman
+	 * picks whichever compresses best per hunk, so a normal build must
+	 * init()/allocate all of them up front just in case a hunk needs one.
+	 * Under LOWRAM_MAP, codecintf[] is still resolved eagerly (cheap - just
+	 * matching a tag to a codec_interface pointer) but init() itself is
+	 * deferred to the first hunk_read_into_memory() call that actually needs
+	 * that slot - see ensure_codec_ready(). */
+	uint8_t						codec_lazy_initialized[4];
+#endif
 };
 
 
@@ -272,6 +339,14 @@ static chd_error hunk_read_into_memory(chd_file *chd, uint32_t hunknum, uint8_t 
 
 /* internal map access */
 static chd_error map_read(chd_file *chd);
+#if LOWRAM_MAP
+static chd_error map_read_one_legacy(chd_file *chd, uint32_t hunknum, map_entry *entry);
+static chd_error build_v5_map_checkpoints(chd_file *chd, chd_header *header, uint64_t file_base, uint64_t mapbytes,
+	uint64_t firstoffs, uint8_t lengthbits, uint8_t selfbits, uint8_t parentbits, uint16_t mapcrc);
+static chd_error ensure_v5_map_window(chd_file *chd, v5_map_window *win, uint64_t byte_start, uint64_t byte_end, uint32_t cpidx);
+static chd_error v5_map_get_entry(chd_file *chd, uint32_t hunknum, uint8_t out[12]);
+static chd_error ensure_codec_ready(chd_file *chd, size_t slot, void *codec);
+#endif
 
 /* metadata management */
 static chd_error metadata_find_entry(chd_file *chd, uint32_t metatag, uint32_t metaindex, metadata_entry *metaentry);
@@ -583,12 +658,14 @@ static CHDR_INLINE int map_size_v5(chd_header* header, size_t *size)
 }
 
 /*-------------------------------------------------
-    crc16 - calculate CRC16 (from hashing.cpp)
+    crc16_update - calculate CRC16 (from
+    hashing.cpp), continuing from a prior partial
+    result - lets LOWRAM_MAP verify the map CRC
+    across chunks without materializing the whole
+    buffer at once
 -------------------------------------------------*/
-uint16_t crc16(const void *data, uint32_t length)
+static uint16_t crc16_update(uint16_t crc, const void *data, uint32_t length)
 {
-	uint16_t crc = 0xffff;
-
 	static const uint16_t s_table[256] =
 	{
 		0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50a5, 0x60c6, 0x70e7,
@@ -627,10 +704,18 @@ uint16_t crc16(const void *data, uint32_t length)
 
 	const uint8_t *src = (uint8_t*)data;
 
-	/* fetch the current value into a local and rip through the source data */
+	/* rip through the source data */
 	while (length-- != 0)
 		crc = (crc << 8) ^ s_table[(crc >> 8) ^ *src++];
 	return crc;
+}
+
+/*-------------------------------------------------
+    crc16 - calculate CRC16 (from hashing.cpp)
+-------------------------------------------------*/
+uint16_t crc16(const void *data, uint32_t length)
+{
+	return crc16_update(0xffff, data, length);
 }
 
 /*-------------------------------------------------
@@ -646,23 +731,25 @@ static CHDR_INLINE int chd_compressed(chd_header* header) {
 
 static chd_error decompress_v5_map(chd_file* chd, chd_header* header)
 {
+#if !LOWRAM_MAP
 	uint32_t hunknum;
 	int repcount = 0;
 	uint8_t lastcomp = 0;
 	uint32_t last_self = 0;
 	uint64_t last_parent = 0;
+	uint64_t curoffset;
 	struct bitstream* bitbuf;
+	uint8_t *compressed_ptr;
+	struct huffman_decoder* decoder;
+	enum huffman_error err;
+#endif
 	uint32_t mapbytes;
 	uint64_t firstoffs;
 	uint16_t mapcrc;
 	uint8_t lengthbits;
 	uint8_t selfbits;
 	uint8_t parentbits;
-	uint8_t *compressed_ptr;
 	uint8_t rawbuf[16];
-	struct huffman_decoder* decoder;
-	enum huffman_error err;
-	uint64_t curoffset;
 	size_t rawmapsize;
 
 	if (!map_size_v5(header, &rawmapsize))
@@ -673,12 +760,18 @@ static chd_error decompress_v5_map(chd_file* chd, chd_header* header)
 		if ((header->mapoffset + rawmapsize) >= chd->file_size || (header->mapoffset + rawmapsize) < header->mapoffset)
 			return CHDERR_INVALID_FILE;
 
+#if LOWRAM_MAP
+		/* not entropy-coded - each entry is independently seekable, so there's
+		 * nothing to materialize. v5_map_get_entry() reads it lazily. */
+		return CHDERR_NONE;
+#else
 		header->rawmap = (uint8_t*)malloc(rawmapsize);
 		if (header->rawmap == NULL)
 			return CHDERR_OUT_OF_MEMORY;
 		if (!seek_and_read(chd, header->mapoffset, header->rawmap, rawmapsize))
 			return CHDERR_READ_ERROR;
 		return CHDERR_NONE;
+#endif
 	}
 
 	/* read the header */
@@ -694,6 +787,26 @@ static chd_error decompress_v5_map(chd_file* chd, chd_header* header)
 	/* now read the map */
 	if ((header->mapoffset + mapbytes) < header->mapoffset || (header->mapoffset + mapbytes) >= chd->file_size)
 		return CHDERR_INVALID_FILE;
+
+#if LOWRAM_MAP
+	/* build_v5_map_checkpoints() owns reading the compressed blob (in small
+	 * rolling chunks, not all mapbytes at once) and creating the huffman
+	 * decoder itself - nothing to set up here. */
+	{
+		chd_error cperr = build_v5_map_checkpoints(chd, header, header->mapoffset + 16, mapbytes,
+			firstoffs, lengthbits, selfbits, parentbits, mapcrc);
+		if (cperr != CHDERR_NONE)
+			return cperr;
+		chd->lowram_map.mapbytes = mapbytes;
+		chd->lowram_map.firstoffs = firstoffs;
+		chd->lowram_map.lengthbits = lengthbits;
+		chd->lowram_map.selfbits = selfbits;
+		chd->lowram_map.parentbits = parentbits;
+		chd->lowram_map.pass1_window.checkpoint_idx = 0xFFFFFFFFu;
+		chd->lowram_map.pass2_window.checkpoint_idx = 0xFFFFFFFFu;
+		return CHDERR_NONE;
+	}
+#else
 	compressed_ptr = (uint8_t*)malloc(sizeof(uint8_t) * mapbytes);
 	if (compressed_ptr == NULL)
 		return CHDERR_OUT_OF_MEMORY;
@@ -703,13 +816,6 @@ static chd_error decompress_v5_map(chd_file* chd, chd_header* header)
 		return CHDERR_READ_ERROR;
 	}
 	bitbuf = create_bitstream(compressed_ptr, sizeof(uint8_t) * mapbytes);
-	header->rawmap = (uint8_t*)malloc(rawmapsize);
-	if (header->rawmap == NULL)
-	{
-		free(compressed_ptr);
-		free(bitbuf);
-		return CHDERR_OUT_OF_MEMORY;
-	}
 
 	/* first decode the compression types */
 	decoder = create_huffman_decoder(16, 8);
@@ -727,6 +833,15 @@ static chd_error decompress_v5_map(chd_file* chd, chd_header* header)
 		free(bitbuf);
 		delete_huffman_decoder(decoder);
 		return CHDERR_DECOMPRESSION_ERROR;
+	}
+
+	header->rawmap = (uint8_t*)malloc(rawmapsize);
+	if (header->rawmap == NULL)
+	{
+		free(compressed_ptr);
+		free(bitbuf);
+		delete_huffman_decoder(decoder);
+		return CHDERR_OUT_OF_MEMORY;
 	}
 
 	for (hunknum = 0; hunknum < header->hunkcount; hunknum++)
@@ -830,7 +945,565 @@ static chd_error decompress_v5_map(chd_file* chd, chd_header* header)
 		return CHDERR_DECOMPRESSION_ERROR;
 
 	return CHDERR_NONE;
+#endif
 }
+
+#if LOWRAM_MAP
+/*-------------------------------------------------
+    build_v5_map_checkpoints - run both v5 map
+    decode passes once (same as decompress_v5_map's
+    non-LOWRAM_MAP path), but instead of writing a
+    12-byte entry per hunk into a fully materialized
+    buffer, record a resumable checkpoint every
+    LOWRAM_MAP_CHECKPOINT_STRIDE hunks. Verifies the
+    same map CRC as the normal path, computed
+    incrementally instead of over one big buffer.
+
+    Reads the compressed map from the file in small
+    rolling chunks (v5_build_stream) instead of one
+    mapbytes-sized buffer, and never materializes a
+    per-hunk compression-type array either: pass 1 is
+    decoded twice (once to find where it ends / pass 2
+    begins, again as a "mirror" alongside pass 2 to
+    regenerate each hunk's type on the fly) rather than
+    stored - a second linear scan is a one-time,
+    bounded CPU cost, in exchange for the resident
+    footprint during this whole function being a
+    couple of small chunk buffers instead of two
+    buffers sized off total hunk count / map size.
+-------------------------------------------------*/
+
+#define V5_BUILD_STREAM_CHUNK  4096u
+#define V5_BUILD_STREAM_MARGIN 16u
+
+typedef struct _v5_build_stream v5_build_stream;
+struct _v5_build_stream
+{
+	chd_file *			chd;
+	uint64_t			file_base;	/* absolute file offset of the compressed blob's start */
+	uint64_t			mapbytes;	/* total blob size, for bounds */
+	uint64_t			window_off;	/* blob-relative byte offset that buf[0] corresponds to */
+	uint32_t			buf_valid;	/* valid bytes currently in buf */
+	struct bitstream	bs;
+	uint8_t				buf[V5_BUILD_STREAM_CHUNK];
+};
+
+static chd_error v5_build_stream_fill(v5_build_stream *s, uint64_t blob_byte_off)
+{
+	uint64_t remain = (blob_byte_off < s->mapbytes) ? (s->mapbytes - blob_byte_off) : 0;
+	uint32_t want = (remain < V5_BUILD_STREAM_CHUNK) ? (uint32_t)remain : V5_BUILD_STREAM_CHUNK;
+
+	if (want != 0 && !seek_and_read(s->chd, s->file_base + blob_byte_off, s->buf, want))
+		return CHDERR_READ_ERROR;
+	s->window_off = blob_byte_off;
+	s->buf_valid = want;
+	s->bs.buffer = 0; s->bs.bits = 0; s->bs.read = s->buf; s->bs.doffset = 0; s->bs.dlength = want;
+	return CHDERR_NONE;
+}
+
+static chd_error v5_build_stream_init(v5_build_stream *s, chd_file *chd, uint64_t file_base, uint64_t mapbytes, uint64_t start_byte)
+{
+	s->chd = chd;
+	s->file_base = file_base;
+	s->mapbytes = mapbytes;
+	return v5_build_stream_fill(s, start_byte);
+}
+
+/* call before decoding each hunk: makes sure at least V5_BUILD_STREAM_MARGIN
+ * bytes remain available past the current position (comfortably more than
+ * one hunk's worth of pass1/pass2 fields ever needs), refilling from the
+ * file if not. No-op the common case - only refills once per chunk. */
+static chd_error v5_build_stream_ensure(v5_build_stream *s)
+{
+	uint64_t local_byte = bitstream_position_bits(&s->bs) / 8;
+	uint64_t global_byte = s->window_off + local_byte;
+
+	if (local_byte < s->buf_valid && (s->buf_valid - local_byte) >= V5_BUILD_STREAM_MARGIN)
+		return CHDERR_NONE;
+	if (global_byte + V5_BUILD_STREAM_MARGIN >= s->mapbytes)
+		return CHDERR_NONE; /* near end of blob - bitstream_overflow() catches true EOF */
+
+	{
+		unsigned rem_bits = (unsigned)(bitstream_position_bits(&s->bs) % 8);
+		chd_error err = v5_build_stream_fill(s, global_byte);
+		if (err != CHDERR_NONE)
+			return err;
+		if (rem_bits)
+			bitstream_read(&s->bs, rem_bits);
+	}
+	return CHDERR_NONE;
+}
+
+static uint64_t v5_build_stream_position_bits(v5_build_stream *s)
+{
+	return s->window_off * 8 + bitstream_position_bits(&s->bs);
+}
+
+static chd_error build_v5_map_checkpoints(chd_file *chd, chd_header *header, uint64_t file_base, uint64_t mapbytes,
+	uint64_t firstoffs, uint8_t lengthbits, uint8_t selfbits, uint8_t parentbits, uint16_t mapcrc)
+{
+	uint32_t hunknum;
+	int repcount;
+	uint8_t lastcomp;
+	uint32_t last_self;
+	uint64_t last_parent;
+	uint64_t curoffset;
+	uint16_t running_crc = 0xffff;
+	uint32_t checkpoint_capacity;
+	v5_map_checkpoint *checkpoints;
+	uint32_t checkpoint_count;
+	struct huffman_decoder *decoder;
+	enum huffman_error herr;
+	v5_build_stream pass1, pass1_mirror, pass2;
+	uint64_t pass1_symbols_start_bits;
+	chd_error err;
+
+	checkpoint_capacity = header->hunkcount / LOWRAM_MAP_CHECKPOINT_STRIDE + 1;
+	checkpoints = (v5_map_checkpoint*)malloc(sizeof(v5_map_checkpoint) * checkpoint_capacity);
+	if (checkpoints == NULL)
+		return CHDERR_OUT_OF_MEMORY;
+
+	decoder = create_huffman_decoder(16, 8);
+	if (decoder == NULL)
+	{
+		free(checkpoints);
+		return CHDERR_OUT_OF_MEMORY;
+	}
+
+	if ((err = v5_build_stream_init(&pass1, chd, file_base, mapbytes, 0)) != CHDERR_NONE ||
+		(herr = huffman_import_tree_rle(decoder, &pass1.bs)) != HUFFERR_NONE)
+	{
+		free(checkpoints);
+		delete_huffman_decoder(decoder);
+		return (err != CHDERR_NONE) ? err : CHDERR_DECOMPRESSION_ERROR;
+	}
+	pass1_symbols_start_bits = v5_build_stream_position_bits(&pass1);
+
+	/* pass 1, first traversal: find checkpoint pass1_bitpos/lastcomp/repcount
+	 * and where pass 1 ends (== where pass 2 begins) */
+	repcount = 0;
+	lastcomp = 0;
+	checkpoint_count = 0;
+	for (hunknum = 0; hunknum < header->hunkcount; hunknum++)
+	{
+		if (hunknum % LOWRAM_MAP_CHECKPOINT_STRIDE == 0)
+		{
+			checkpoints[checkpoint_count].hunknum = hunknum;
+			checkpoints[checkpoint_count].pass1_bitpos = v5_build_stream_position_bits(&pass1);
+			checkpoints[checkpoint_count].lastcomp = lastcomp;
+			checkpoints[checkpoint_count].repcount = repcount;
+			checkpoint_count++;
+		}
+
+		if ((err = v5_build_stream_ensure(&pass1)) != CHDERR_NONE)
+		{
+			free(checkpoints);
+			delete_huffman_decoder(decoder);
+			return err;
+		}
+
+		if (repcount > 0)
+			repcount--;
+		else
+		{
+			uint8_t val;
+			if (bitstream_overflow(&pass1.bs))
+			{
+				free(checkpoints);
+				delete_huffman_decoder(decoder);
+				return CHDERR_DECOMPRESSION_ERROR;
+			}
+
+			val = huffman_decode_one(decoder, &pass1.bs);
+			if (val == COMPRESSION_RLE_SMALL)
+				repcount = 2 + huffman_decode_one(decoder, &pass1.bs);
+			else if (val == COMPRESSION_RLE_LARGE)
+				repcount = 2 + 16 + (huffman_decode_one(decoder, &pass1.bs) << 4), repcount += huffman_decode_one(decoder, &pass1.bs);
+			else
+				lastcomp = val;
+		}
+	}
+	chd->lowram_map.pass1_end_bitpos = v5_build_stream_position_bits(&pass1);
+
+	/* second traversal: real pass 2, plus a pass-1 "mirror" run alongside it
+	 * (same algorithm, fresh state) to regenerate each hunk's type without
+	 * having stored it */
+	if ((err = v5_build_stream_init(&pass1_mirror, chd, file_base, mapbytes, pass1_symbols_start_bits / 8)) != CHDERR_NONE)
+	{
+		free(checkpoints);
+		delete_huffman_decoder(decoder);
+		return err;
+	}
+	if (pass1_symbols_start_bits % 8)
+		bitstream_read(&pass1_mirror.bs, (int)(pass1_symbols_start_bits % 8));
+
+	if ((err = v5_build_stream_init(&pass2, chd, file_base, mapbytes, chd->lowram_map.pass1_end_bitpos / 8)) != CHDERR_NONE)
+	{
+		free(checkpoints);
+		delete_huffman_decoder(decoder);
+		return err;
+	}
+	if (chd->lowram_map.pass1_end_bitpos % 8)
+		bitstream_read(&pass2.bs, (int)(chd->lowram_map.pass1_end_bitpos % 8));
+
+	repcount = 0;
+	lastcomp = 0;
+	curoffset = firstoffs;
+	last_self = 0;
+	last_parent = 0;
+	checkpoint_count = 0;
+	for (hunknum = 0; hunknum < header->hunkcount; hunknum++)
+	{
+		uint8_t type;
+		uint64_t offset;
+		uint32_t length = 0;
+		uint16_t crc = 0;
+		uint8_t entry[12];
+
+		if (hunknum % LOWRAM_MAP_CHECKPOINT_STRIDE == 0)
+		{
+			checkpoints[checkpoint_count].pass2_bitpos = v5_build_stream_position_bits(&pass2);
+			checkpoints[checkpoint_count].curoffset = curoffset;
+			checkpoints[checkpoint_count].last_self = last_self;
+			checkpoints[checkpoint_count].last_parent = last_parent;
+			checkpoint_count++;
+		}
+
+		if ((err = v5_build_stream_ensure(&pass1_mirror)) != CHDERR_NONE || (err = v5_build_stream_ensure(&pass2)) != CHDERR_NONE)
+		{
+			free(checkpoints);
+			delete_huffman_decoder(decoder);
+			return err;
+		}
+
+		/* pass-1 mirror: regenerate this hunk's type */
+		if (repcount > 0)
+			type = lastcomp, repcount--;
+		else
+		{
+			uint8_t val;
+			if (bitstream_overflow(&pass1_mirror.bs))
+			{
+				free(checkpoints);
+				delete_huffman_decoder(decoder);
+				return CHDERR_DECOMPRESSION_ERROR;
+			}
+
+			val = huffman_decode_one(decoder, &pass1_mirror.bs);
+			if (val == COMPRESSION_RLE_SMALL)
+				type = lastcomp, repcount = 2 + huffman_decode_one(decoder, &pass1_mirror.bs);
+			else if (val == COMPRESSION_RLE_LARGE)
+				type = lastcomp, repcount = 2 + 16 + (huffman_decode_one(decoder, &pass1_mirror.bs) << 4), repcount += huffman_decode_one(decoder, &pass1_mirror.bs);
+			else
+				type = lastcomp = val;
+		}
+
+		/* pass 2: this hunk's length/offset/crc */
+		offset = curoffset;
+		switch (type)
+		{
+			case COMPRESSION_TYPE_0:
+			case COMPRESSION_TYPE_1:
+			case COMPRESSION_TYPE_2:
+			case COMPRESSION_TYPE_3:
+				curoffset += length = bitstream_read(&pass2.bs, lengthbits);
+				crc = bitstream_read(&pass2.bs, 16);
+				break;
+
+			case COMPRESSION_NONE:
+				curoffset += length = header->hunkbytes;
+				crc = bitstream_read(&pass2.bs, 16);
+				break;
+
+			case COMPRESSION_SELF:
+				last_self = offset = bitstream_read(&pass2.bs, selfbits);
+				break;
+
+			case COMPRESSION_PARENT:
+				offset = bitstream_read(&pass2.bs, parentbits);
+				last_parent = offset;
+				break;
+
+			case COMPRESSION_SELF_1:
+				last_self++;
+				/* Fallthrough */
+			case COMPRESSION_SELF_0:
+				type = COMPRESSION_SELF;
+				offset = last_self;
+				break;
+
+			case COMPRESSION_PARENT_SELF:
+				type = COMPRESSION_PARENT;
+				last_parent = offset = ( ((uint64_t)hunknum) * ((uint64_t)header->hunkbytes) ) / header->unitbytes;
+				break;
+
+			case COMPRESSION_PARENT_1:
+				last_parent += header->hunkbytes / header->unitbytes;
+				/* Fallthrough */
+			case COMPRESSION_PARENT_0:
+				type = COMPRESSION_PARENT;
+				offset = last_parent;
+				break;
+		}
+
+		entry[0] = type;
+		put_bigendian_uint24(&entry[1], length);
+		put_bigendian_uint48(&entry[4], offset);
+		put_bigendian_uint16(&entry[10], crc);
+		running_crc = crc16_update(running_crc, entry, 12);
+	}
+
+	if (running_crc != mapcrc)
+	{
+		free(checkpoints);
+		delete_huffman_decoder(decoder);
+		return CHDERR_DECOMPRESSION_ERROR;
+	}
+
+	chd->lowram_map.checkpoints = checkpoints;
+	chd->lowram_map.checkpoint_count = checkpoint_count;
+	chd->lowram_map.decoder = decoder;
+	return CHDERR_NONE;
+}
+
+/*-------------------------------------------------
+    ensure_v5_map_window - make sure `win` holds the
+    compressed-map bytes [byte_start, byte_end) for
+    checkpoint `cpidx`. A no-op if it already does
+    (the common case for sequential access - most
+    lookups stay within the same checkpoint bucket,
+    up to LOWRAM_MAP_CHECKPOINT_STRIDE hunks); re-reads
+    just that small range from the file otherwise.
+-------------------------------------------------*/
+
+static chd_error ensure_v5_map_window(chd_file *chd, v5_map_window *win, uint64_t byte_start, uint64_t byte_end, uint32_t cpidx)
+{
+	uint32_t byte_len;
+	uint8_t *data;
+
+	if (win->checkpoint_idx == cpidx && win->data != NULL)
+		return CHDERR_NONE;
+
+	if (byte_end > chd->lowram_map.mapbytes)
+		byte_end = chd->lowram_map.mapbytes;
+	if (byte_end < byte_start)
+		byte_end = byte_start;
+	byte_len = (uint32_t)(byte_end - byte_start);
+
+	data = (uint8_t*)malloc(byte_len ? byte_len : 1);
+	if (data == NULL)
+		return CHDERR_OUT_OF_MEMORY;
+
+	if (byte_len != 0 && !seek_and_read(chd, chd->header.mapoffset + 16 + byte_start, data, byte_len))
+	{
+		free(data);
+		return CHDERR_READ_ERROR;
+	}
+
+	if (win->data != NULL)
+		free(win->data);
+	win->data = data;
+	win->byte_start = (uint32_t)byte_start;
+	win->byte_len = byte_len;
+	win->checkpoint_idx = cpidx;
+	return CHDERR_NONE;
+}
+
+/*-------------------------------------------------
+    v5_map_get_entry - re-derive a single v5 map
+    entry on demand from the nearest checkpoint,
+    mirroring decompress_v5_map's algorithm exactly
+    (just resumed instead of starting at hunk 0)
+-------------------------------------------------*/
+
+static chd_error v5_map_get_entry(chd_file *chd, uint32_t hunknum, uint8_t out[12])
+{
+	v5_lowram_map *lm = &chd->lowram_map;
+	chd_header *header = &chd->header;
+	struct bitstream bs1, bs2;
+	uint32_t cur_hunk;
+	uint8_t lastcomp;
+	int32_t repcount;
+	uint64_t curoffset;
+	uint32_t last_self;
+	uint64_t last_parent;
+	uint32_t cpidx, i;
+
+	if (!chd_compressed(header))
+	{
+		/* uncompressed v5 map: fixed-width entries, but only mapentrybytes (4)
+		 * wide here, not 12 - see map_size_v5()/header_read()'s
+		 * `mapentrybytes = chd_compressed(header) ? 12 : 4`. */
+		if (!seek_and_read(chd, header->mapoffset + (uint64_t)hunknum * header->mapentrybytes, out, header->mapentrybytes))
+			return CHDERR_READ_ERROR;
+		return CHDERR_NONE;
+	}
+
+	if (hunknum >= header->hunkcount || lm->checkpoint_count == 0)
+		return CHDERR_INVALID_PARAMETER;
+
+	/* checkpoints are hunknum-ascending; find the nearest one <= hunknum */
+	cpidx = 0;
+	for (i = 1; i < lm->checkpoint_count && lm->checkpoints[i].hunknum <= hunknum; i++)
+		cpidx = i;
+
+	{
+		uint64_t pass1_start_bit = lm->checkpoints[cpidx].pass1_bitpos;
+		uint64_t pass1_end_bit = (cpidx + 1 < lm->checkpoint_count) ?
+			lm->checkpoints[cpidx + 1].pass1_bitpos : lm->pass1_end_bitpos;
+		uint64_t pass2_start_bit = lm->checkpoints[cpidx].pass2_bitpos;
+		uint64_t pass2_end_bit = (cpidx + 1 < lm->checkpoint_count) ?
+			lm->checkpoints[cpidx + 1].pass2_bitpos : (uint64_t)lm->mapbytes * 8;
+		chd_error werr;
+
+		if ((werr = ensure_v5_map_window(chd, &lm->pass1_window, pass1_start_bit / 8,
+				(pass1_end_bit + 7) / 8, cpidx)) != CHDERR_NONE)
+			return werr;
+		if ((werr = ensure_v5_map_window(chd, &lm->pass2_window, pass2_start_bit / 8,
+				(pass2_end_bit + 7) / 8, cpidx)) != CHDERR_NONE)
+			return werr;
+
+		bs1.buffer = 0; bs1.bits = 0; bs1.read = lm->pass1_window.data; bs1.doffset = 0;
+		bs1.dlength = lm->pass1_window.byte_len;
+		bitstream_seek_bits(&bs1, pass1_start_bit - (uint64_t)lm->pass1_window.byte_start * 8);
+
+		bs2.buffer = 0; bs2.bits = 0; bs2.read = lm->pass2_window.data; bs2.doffset = 0;
+		bs2.dlength = lm->pass2_window.byte_len;
+		bitstream_seek_bits(&bs2, pass2_start_bit - (uint64_t)lm->pass2_window.byte_start * 8);
+	}
+
+	lastcomp = lm->checkpoints[cpidx].lastcomp;
+	repcount = lm->checkpoints[cpidx].repcount;
+	curoffset = lm->checkpoints[cpidx].curoffset;
+	last_self = lm->checkpoints[cpidx].last_self;
+	last_parent = lm->checkpoints[cpidx].last_parent;
+
+	for (cur_hunk = lm->checkpoints[cpidx].hunknum; cur_hunk <= hunknum; cur_hunk++)
+	{
+		uint8_t type;
+		uint64_t offset;
+		uint32_t length = 0;
+		uint16_t crc = 0;
+
+		/* pass 1: this hunk's compression-type byte */
+		if (repcount > 0)
+			type = lastcomp, repcount--;
+		else
+		{
+			uint8_t val;
+			if (bitstream_overflow(&bs1))
+				return CHDERR_DECOMPRESSION_ERROR;
+
+			val = huffman_decode_one(lm->decoder, &bs1);
+			if (val == COMPRESSION_RLE_SMALL)
+				type = lastcomp, repcount = 2 + huffman_decode_one(lm->decoder, &bs1);
+			else if (val == COMPRESSION_RLE_LARGE)
+				type = lastcomp, repcount = 2 + 16 + (huffman_decode_one(lm->decoder, &bs1) << 4), repcount += huffman_decode_one(lm->decoder, &bs1);
+			else
+				type = lastcomp = val;
+		}
+
+		/* pass 2: this hunk's length/offset/crc */
+		offset = curoffset;
+		switch (type)
+		{
+			case COMPRESSION_TYPE_0:
+			case COMPRESSION_TYPE_1:
+			case COMPRESSION_TYPE_2:
+			case COMPRESSION_TYPE_3:
+				curoffset += length = bitstream_read(&bs2, lm->lengthbits);
+				crc = bitstream_read(&bs2, 16);
+				break;
+
+			case COMPRESSION_NONE:
+				curoffset += length = header->hunkbytes;
+				crc = bitstream_read(&bs2, 16);
+				break;
+
+			case COMPRESSION_SELF:
+				last_self = offset = bitstream_read(&bs2, lm->selfbits);
+				break;
+
+			case COMPRESSION_PARENT:
+				offset = bitstream_read(&bs2, lm->parentbits);
+				last_parent = offset;
+				break;
+
+			case COMPRESSION_SELF_1:
+				last_self++;
+				/* Fallthrough */
+			case COMPRESSION_SELF_0:
+				type = COMPRESSION_SELF;
+				offset = last_self;
+				break;
+
+			case COMPRESSION_PARENT_SELF:
+				type = COMPRESSION_PARENT;
+				last_parent = offset = ( ((uint64_t)cur_hunk) * ((uint64_t)header->hunkbytes) ) / header->unitbytes;
+				break;
+
+			case COMPRESSION_PARENT_1:
+				last_parent += header->hunkbytes / header->unitbytes;
+				/* Fallthrough */
+			case COMPRESSION_PARENT_0:
+				type = COMPRESSION_PARENT;
+				offset = last_parent;
+				break;
+		}
+
+		if (cur_hunk == hunknum)
+		{
+			out[0] = type;
+			put_bigendian_uint24(&out[1], length);
+			put_bigendian_uint48(&out[4], offset);
+			put_bigendian_uint16(&out[10], crc);
+		}
+	}
+
+	return CHDERR_NONE;
+}
+
+/*-------------------------------------------------
+    ensure_codec_ready - lazily init() a CHDv5
+    codec slot the first time a hunk actually
+    needs it, instead of eagerly init()ing every
+    codec the header lists as a candidate. A CHD
+    encoded with N alternate codecs (chdman picks
+    the best per hunk) would otherwise pay for all
+    N codecs' dictionaries/windows simultaneously
+    even though any single hunk only ever uses one.
+-------------------------------------------------*/
+
+static chd_error ensure_codec_ready(chd_file *chd, size_t slot, void *codec)
+{
+	size_t j;
+
+	if (chd->codec_lazy_initialized[slot])
+		return CHDERR_NONE;
+
+	/* an earlier slot referencing the same codec_interface (and therefore
+	 * the same underlying codec_data struct) may already be initialized -
+	 * mirrors the dedup check chd_open_core_file_callbacks() does eagerly */
+	for (j = 0; j < slot; j++)
+	{
+		if (chd->codecintf[slot] == chd->codecintf[j] && chd->codec_lazy_initialized[j])
+		{
+			chd->codec_lazy_initialized[slot] = 1;
+			return CHDERR_NONE;
+		}
+	}
+
+	if (chd->codecintf[slot]->init != NULL)
+	{
+		chd_error err = chd->codecintf[slot]->init(codec, chd->header.hunkbytes);
+		if (err != CHDERR_NONE)
+			return err;
+	}
+
+	chd->codec_lazy_initialized[slot] = 1;
+	return CHDERR_NONE;
+}
+#endif /* LOWRAM_MAP */
 
 /*-------------------------------------------------
     map_extract_old - extract a single map
@@ -1011,7 +1684,9 @@ CHD_EXPORT chd_error chd_open_core_file_callbacks(const core_file_callbacks *cal
 	else
 	{
 		size_t decompnum;
+#if !LOWRAM_MAP
 		int needsinit;
+#endif
 
 		/* verify the compression types and initialize the codecs */
 		for (decompnum = 0; decompnum < ARRAY_LENGTH(newchd->header.compression); decompnum++)
@@ -1029,6 +1704,7 @@ CHD_EXPORT chd_error chd_open_core_file_callbacks(const core_file_callbacks *cal
 			if (newchd->codecintf[decompnum] == NULL && newchd->header.compression[decompnum] != 0)
 				EARLY_EXIT(err = CHDERR_UNSUPPORTED_FORMAT);
 
+#if !LOWRAM_MAP
 			/* ensure we don't try to initialize the same codec twice */
 			/* this is "normal" for chds where the user overrides the codecs, it'll have none repeated */
 			needsinit = (newchd->codecintf[decompnum]->init != NULL);
@@ -1092,6 +1768,17 @@ CHD_EXPORT chd_error chd_open_core_file_callbacks(const core_file_callbacks *cal
 				if (err != CHDERR_NONE)
 					EARLY_EXIT(err);
 			}
+#else
+			/* a CHDv5 can list up to 4 alternate codecs; chdman picks the
+			 * best per hunk, so any hunk might need any of them. Eagerly
+			 * init()ing all of them means paying for every one of their
+			 * dictionaries/windows simultaneously, even though a given
+			 * hunk only ever uses one. codecintf[decompnum] is still
+			 * resolved above (cheap - just a tag lookup); init() itself is
+			 * deferred to ensure_codec_ready(), called from
+			 * hunk_read_into_memory() the first time a hunk actually
+			 * selects this slot. */
+#endif
 		}
 	}
 
@@ -1248,6 +1935,11 @@ CHD_EXPORT void chd_close(chd_file *chd)
 
 			if (codec)
 			{
+#if LOWRAM_MAP
+				/* never lazily init()ed (no hunk ever selected this slot) -
+				 * most codec free() implementations assume init() ran first */
+				if (chd->codec_lazy_initialized[i])
+#endif
 				chd->codecintf[i]->free(codec);
 			}
 		}
@@ -1255,6 +1947,17 @@ CHD_EXPORT void chd_close(chd_file *chd)
 		/* Free the raw map */
 		if (chd->header.rawmap != NULL)
 			free(chd->header.rawmap);
+
+#if LOWRAM_MAP
+		if (chd->lowram_map.pass1_window.data != NULL)
+			free(chd->lowram_map.pass1_window.data);
+		if (chd->lowram_map.pass2_window.data != NULL)
+			free(chd->lowram_map.pass2_window.data);
+		if (chd->lowram_map.checkpoints != NULL)
+			free(chd->lowram_map.checkpoints);
+		if (chd->lowram_map.decoder != NULL)
+			delete_huffman_decoder(chd->lowram_map.decoder);
+#endif
 	}
 
 	/* free the compressed data buffer */
@@ -1819,7 +2522,14 @@ static chd_error hunk_read_into_memory(chd_file *chd, uint32_t hunknum, uint8_t 
 
 	if (chd->header.version < 5)
 	{
+#if LOWRAM_MAP
+		map_entry entry_storage;
+		map_entry *entry = &entry_storage;
+		if ((err = map_read_one_legacy(chd, hunknum, entry)) != CHDERR_NONE)
+			return err;
+#else
 		map_entry *entry = &chd->map[hunknum];
+#endif
 		uint32_t bytes;
 		uint8_t* compressed_bytes;
 
@@ -1882,7 +2592,14 @@ static chd_error hunk_read_into_memory(chd_file *chd, uint32_t hunknum, uint8_t 
 #if VERIFY_BLOCK_CRC
 		uint16_t blockcrc;
 #endif
+#if LOWRAM_MAP
+		uint8_t rawmap_storage[12];
+		uint8_t *rawmap = rawmap_storage;
+		if ((err = v5_map_get_entry(chd, hunknum, rawmap)) != CHDERR_NONE)
+			return err;
+#else
 		uint8_t *rawmap = &chd->header.rawmap[chd->header.mapentrybytes * hunknum];
+#endif
 		uint8_t* compressed_bytes;
 
 		/* uncompressed case */
@@ -1962,6 +2679,10 @@ static chd_error hunk_read_into_memory(chd_file *chd, uint32_t hunknum, uint8_t 
 				}
 				if (codec==NULL)
 					return CHDERR_CODEC_ERROR;
+#if LOWRAM_MAP
+				if ((err = ensure_codec_ready(chd, rawmap[0], codec)) != CHDERR_NONE)
+					return err;
+#endif
 				err = chd->codecintf[rawmap[0]]->decompress(codec, compressed_bytes, blocklen, dest, chd->header.hunkbytes);
 				if (err != CHDERR_NONE)
 					return err;
@@ -2041,11 +2762,21 @@ static chd_error map_read(chd_file *chd)
 	uint8_t cookie[MAP_ENTRY_SIZE];
 	chd_error err;
 	uint32_t i;
+#if LOWRAM_MAP
+	map_entry extracted[MAP_STACK_ENTRIES];
+#endif
 
-	/* first allocate memory */
+	/* legacy (v1-v4) map entries are fixed-size and independently seekable -
+	 * under LOWRAM_MAP, don't materialize the whole array, just validate it
+	 * (cookie + maxoffset, same as always) and re-read the single entry
+	 * needed on each hunk_read_into_memory() call instead. chd->map stays
+	 * NULL; hunknum*entrysize + chd->header.length recovers any entry's
+	 * file offset without storing anything. */
+#if !LOWRAM_MAP
 	chd->map = (map_entry *)malloc(sizeof(chd->map[0]) * chd->header.totalhunks);
 	if (!chd->map)
 		return CHDERR_OUT_OF_MEMORY;
+#endif
 
 	/* read the map entries in in chunks and extract to the map list */
 	fileoffset = chd->header.length;
@@ -2053,6 +2784,11 @@ static chd_error map_read(chd_file *chd)
 	{
 		/* compute how many entries this time */
 		int entries = chd->header.totalhunks - i, j;
+#if !LOWRAM_MAP
+		map_entry *dest = &chd->map[i];
+#else
+		map_entry *dest = extracted;
+#endif
 		if (entries > MAP_STACK_ENTRIES)
 			entries = MAP_STACK_ENTRIES;
 
@@ -2065,19 +2801,19 @@ static chd_error map_read(chd_file *chd)
 		if (entrysize == MAP_ENTRY_SIZE)
 		{
 			for (j = 0; j < entries; j++)
-				map_extract(&raw_map_entries[j * MAP_ENTRY_SIZE], &chd->map[i + j]);
+				map_extract(&raw_map_entries[j * MAP_ENTRY_SIZE], &dest[j]);
 		}
 		else
 		{
 			for (j = 0; j < entries; j++)
-				map_extract_old(&raw_map_entries[j * OLD_MAP_ENTRY_SIZE], &chd->map[i + j], chd->header.hunkbytes);
+				map_extract_old(&raw_map_entries[j * OLD_MAP_ENTRY_SIZE], &dest[j], chd->header.hunkbytes);
 		}
 
 		/* track the maximum offset */
 		for (j = 0; j < entries; j++)
-			if ((chd->map[i + j].flags & MAP_ENTRY_FLAG_TYPE_MASK) == V34_MAP_ENTRY_TYPE_COMPRESSED ||
-				(chd->map[i + j].flags & MAP_ENTRY_FLAG_TYPE_MASK) == V34_MAP_ENTRY_TYPE_UNCOMPRESSED)
-				maxoffset = MAX(maxoffset, chd->map[i + j].offset + chd->map[i + j].length);
+			if ((dest[j].flags & MAP_ENTRY_FLAG_TYPE_MASK) == V34_MAP_ENTRY_TYPE_COMPRESSED ||
+				(dest[j].flags & MAP_ENTRY_FLAG_TYPE_MASK) == V34_MAP_ENTRY_TYPE_UNCOMPRESSED)
+				maxoffset = MAX(maxoffset, dest[j].offset + dest[j].length);
 	}
 
 	/* verify the cookie */
@@ -2090,11 +2826,36 @@ static chd_error map_read(chd_file *chd)
 	return CHDERR_NONE;
 
 cleanup:
+#if !LOWRAM_MAP
 	if (chd->map)
 		free(chd->map);
 	chd->map = NULL;
+#endif
 	return err;
 }
+
+#if LOWRAM_MAP
+/*-------------------------------------------------
+    map_read_one_legacy - lazily fetch a single
+    v1-v4 map entry directly from the file
+-------------------------------------------------*/
+
+static chd_error map_read_one_legacy(chd_file *chd, uint32_t hunknum, map_entry *entry)
+{
+	uint32_t entrysize = (chd->header.version < 3) ? OLD_MAP_ENTRY_SIZE : MAP_ENTRY_SIZE;
+	uint8_t raw[MAP_ENTRY_SIZE];
+	uint64_t fileoffset = chd->header.length + (uint64_t)hunknum * entrysize;
+
+	if (!seek_and_read(chd, fileoffset, raw, entrysize))
+		return CHDERR_READ_ERROR;
+
+	if (entrysize == MAP_ENTRY_SIZE)
+		map_extract(raw, entry);
+	else
+		map_extract_old(raw, entry, chd->header.hunkbytes);
+	return CHDERR_NONE;
+}
+#endif
 
 /***************************************************************************
     INTERNAL METADATA ACCESS
@@ -2166,7 +2927,8 @@ static void *core_stdio_fopen(char const *path) {
 -------------------------------------------------*/
 static uint64_t core_stdio_fsize(void *file) {
 #if defined USE_LIBRETRO_VFS
-	#define core_stdio_fseek_impl fseek
+	/* The libretro VFS fseek returns the new file position, so we adapt it as needed. */
+	#define core_stdio_fseek_impl(file,offset,whence) (fseek(file, offset, whence) < 0 ? -1 : 0)
 	#define core_stdio_ftell_impl ftell
 #elif defined(__WIN32__) || defined(_WIN32) || defined(WIN32) || defined(__WIN64__)
 	#define core_stdio_fseek_impl _fseeki64
