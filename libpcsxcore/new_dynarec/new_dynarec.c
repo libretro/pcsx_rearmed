@@ -320,8 +320,6 @@ static struct compile_info
   static struct regstat branch_regs[MAXBLOCK];
   static struct code_stub stubs[MAXBLOCK];
   static int stubcount;
-  static u_int literals[1024][2];
-  static int literalcount;
   static u_int stop_after_jal;
   static u_int ni_count;
   static u_int err_print_count;
@@ -6645,7 +6643,6 @@ void new_dynarec_clear_full(void)
   memset(invalid_code,1,sizeof(invalid_code));
   hash_table_clear();
   mini_ht_clear();
-  literalcount=0;
   stop_after_jal=0;
   ni_count=0;
   err_print_count=0;
@@ -8381,7 +8378,7 @@ static noinline void pass4_cull_unused_regs(struct compile_state *st)
   for (i = st->slen - 1; i >= 0; i--)
   {
     int hr;
-    __builtin_prefetch(regs[i-2].regmap);
+    if (i > 1) __builtin_prefetch(regs[i-2].regmap);
     if(dops[i].is_jump)
     {
       if(cinfo[i].ba<st->start || cinfo[i].ba>=(st->start+st->slen*4))
@@ -9087,7 +9084,7 @@ static noinline void pass6_clean_registers_r(struct compile_state *st,
     u_int hr_candirty = 0;
     assert(HOST_REGS < 32);
     make_rregs(regs[i].regmap, rregmap_i, &hr_candirty);
-    __builtin_prefetch(regs[i-1].regmap);
+    if (i) __builtin_prefetch(regs[i-1].regmap);
     if(dops[i].is_jump)
     {
       signed char branch_rregmap_i[RRMAP_SIZE];
@@ -9617,6 +9614,7 @@ static int noinline new_recompile_block(u_int addr)
     }
     return -1;
   }
+  arch_begin_block();
 
   // this is just for speculation
   for (i = 1; i < 32; i++) {

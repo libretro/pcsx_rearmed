@@ -1340,7 +1340,6 @@ static void restore_regs(u_int reglist)
 
 static void literal_pool(int n)
 {
-  (void)literals;
 }
 
 static void literal_pool_jumpover(int n)
@@ -2151,6 +2150,10 @@ static void arch_init(void)
     ops[i].br  = 0xd61f0000 | rm_rn_rd(0, 17, 0);      // br x17
   }
   end_tcache_write(ops, (u_char *)ops + sizeof(ndrc->tramp.ops), 1);
+}
+
+static void arch_begin_block(void)
+{
 }
 
 // vim:shiftwidth=2:expandtab
