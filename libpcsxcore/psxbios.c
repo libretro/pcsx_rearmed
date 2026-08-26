@@ -1802,7 +1802,7 @@ static void psxBios_Load_(boolean full)
 	cdrom_cmd_and_wait(0x0e, 1, 1, 0x80u); // CdlSetmode
 	cdrom_cmd_and_wait(0x02, 3, 1, time[0], time[1], time[2]); // CdlSetloc
 	cdrom_cmd_and_wait(0x15, 0, 2); // CdlSeekL
-	psxHwWrite16(0x1f801070, ~4);
+	psxHwWrite16(&psxRegs, 0x1f801070, ~4);
 	MTC0(&psxRegs, 12, psxRegs.CP0.n.SR | 0x404);
 }
 
@@ -1903,11 +1903,11 @@ void psxBios_mem2vram() { // 0x47
 	GPU_writeData((a3<<0x10)|(a2&0xffff));
 	size = ((((a2 * a3) / 2) >> 4) << 16);
 	GPU_writeStatus(0x04000002);
-	psxHwWrite32(0x1f8010f4,0);
-	psxHwWrite32(0x1f8010f0,psxHwRead32(0x1f8010f0)|0x800);
-	psxHwWrite32(0x1f8010a0,Rsp[4]);//might have a buggy...
-	psxHwWrite32(0x1f8010a4, size | 0x10);
-	psxHwWrite32(0x1f8010a8,0x01000201);
+	psxHwWrite32(&psxRegs, 0x1f8010f4, 0);
+	psxHwWrite32(&psxRegs, 0x1f8010f0, psxHwRead32(&psxRegs, 0x1f8010f0) | 0x800);
+	psxHwWrite32(&psxRegs, 0x1f8010a0, Rsp[4]);//might have a buggy...
+	psxHwWrite32(&psxRegs, 0x1f8010a4, size | 0x10);
+	psxHwWrite32(&psxRegs, 0x1f8010a8, 0x01000201);
 
 	pc0 = ra;
 }
@@ -1941,16 +1941,16 @@ void psxBios_GPU_cwb() { // 0x4a
 void psxBios_GPU_SendPackets() { //4b:	
 	gpuSyncPluginSR();
 	GPU_writeStatus(0x04000002);
-	psxHwWrite32(0x1f8010f4,0);
-	psxHwWrite32(0x1f8010f0,psxHwRead32(0x1f8010f0)|0x800);
-	psxHwWrite32(0x1f8010a0,a0);
-	psxHwWrite32(0x1f8010a4,0);
-	psxHwWrite32(0x1f8010a8,0x010000401);
+	psxHwWrite32(&psxRegs, 0x1f8010f4, 0);
+	psxHwWrite32(&psxRegs, 0x1f8010f0, psxHwRead32(&psxRegs, 0x1f8010f0) | 0x800);
+	psxHwWrite32(&psxRegs, 0x1f8010a0, a0);
+	psxHwWrite32(&psxRegs, 0x1f8010a4, 0);
+	psxHwWrite32(&psxRegs, 0x1f8010a8, 0x010000401);
 	pc0 = ra;
 }
 
 void psxBios_sys_a0_4c() { // 0x4c GPU relate
-	psxHwWrite32(0x1f8010a8,0x00000401);
+	psxHwWrite32(&psxRegs, 0x1f8010a8, 0x00000401);
 	GPU_writeData(0x0400000);
 	GPU_writeData(0x0200000);
 	GPU_writeData(0x0100000);
@@ -2044,7 +2044,7 @@ static void psxBios_CdReset_() {
 	// from { 0, 2, 16 } to somewhere and pause
 
 	mips_return(1);
-	psxHwWrite16(0x1f801070, ~4);
+	psxHwWrite16(&psxRegs, 0x1f801070, ~4);
 	MTC0(&psxRegs, 12, psxRegs.CP0.n.SR | 0x404);
 	DeliverEvent(0xf0000003, 0x0020);
 }
@@ -2391,7 +2391,7 @@ static void psxBios_WaitEvent() { // 0a
 	pc0 -= 4;
 	if ((s32)(psxRegs.next_interupt - psxRegs.cycle) > 0)
 		psxRegs.cycle = psxRegs.next_interupt;
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 static void psxBios_TestEvent() { // 0b
@@ -2539,8 +2539,8 @@ void psxBios_StartPAD() { // 13
 
 	psxBios_SysDeqIntRP_(2, A_PADCRD_CHN_E);
 	psxBios_SysEnqIntRP_(2, A_PADCRD_CHN_E);
-	psxHwWrite16(0x1f801070, ~1);
-	psxHwWrite16(0x1f801074, psxHu32(0x1074) | 1);
+	psxHwWrite16(&psxRegs, 0x1f801070, ~1);
+	psxHwWrite16(&psxRegs, 0x1f801074, psxHu32(0x1074) | 1);
 	storeRam32(A_PAD_ACK_VBL, 1);
 	storeRam32(A_RCNT_VBL_ACK + (3 << 2), 0);
 	psxRegs.CP0.n.SR |= 0x401;
@@ -2625,7 +2625,7 @@ static void psxBios_ReturnFromException() { // 17
 	MTC0(&psxRegs, 12, sr);
 
 	use_cycles(53);
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 void psxBios_ResetEntryInt() { // 18
@@ -3075,7 +3075,7 @@ void psxBios_StartCARD() { // 4b
 	psxBios_SysDeqIntRP_(2, A_PADCRD_CHN_E);
 	psxBios_SysEnqIntRP_(2, A_PADCRD_CHN_E);
 
-	psxHwWrite16(0x1f801074, psxHu32(0x1074) | 1);
+	psxHwWrite16(&psxRegs, 0x1f801074, psxHu32(0x1074) | 1);
 	storeRam32(A_PAD_ACK_VBL, 1);
 	storeRam32(A_RCNT_VBL_ACK + (3 << 2), 0);
 	storeRam32(A_CARD_IRQR_ENA, 1);
@@ -3395,11 +3395,11 @@ static void card_vint_handler(void)
 static void psxBios_InitRCnt() { // 00
 	int i;
 	PSXBIOS_LOG("psxBios_%s %x\n", biosC0n[0x00], a0);
-	psxHwWrite16(0x1f801074, psxHu32(0x1074) & ~0x71);
+	psxHwWrite16(&psxRegs, 0x1f801074, psxHu32(0x1074) & ~0x71);
 	for (i = 0; i < 3; i++) {
-		psxHwWrite16(0x1f801100 + i*0x10 + 4, 0);
-		psxHwWrite16(0x1f801100 + i*0x10 + 8, 0);
-		psxHwWrite16(0x1f801100 + i*0x10 + 0, 0);
+		psxHwWrite16(&psxRegs, 0x1f801100 + i*0x10 + 4, 0);
+		psxHwWrite16(&psxRegs, 0x1f801100 + i*0x10 + 8, 0);
+		psxHwWrite16(&psxRegs, 0x1f801100 + i*0x10 + 0, 0);
 	}
 	for (i = 0; i < 4; i++)
 		psxBios_SysEnqIntRP_(a0, 0x6d58 + i * 0x10);
@@ -4283,7 +4283,7 @@ static void handle_chain_x_x_1(u32 enable, u32 irqbit)
 {
 	use_cycles(10);
 	if (enable) {
-		psxHwWrite16(0x1f801070, ~(1u << irqbit));
+		psxHwWrite16(&psxRegs, 0x1f801070, ~(1u << irqbit));
 		psxBios_ReturnFromException();
 	}
 	else
@@ -4304,7 +4304,7 @@ static void hleExc0_0_2() // A(91h) - CdromDmaIrqFunc1
 	//PSXBIOS_LOG("%s\n", __func__);
 
 	if (psxHu32(0x1074) & psxHu32(0x1070) & 8) { // IRQ3 DMA
-		psxHwWrite32(0x1f8010f4, (psxHu32(0x10f4) & 0xffffff) | 0x88000000);
+		psxHwWrite32(&psxRegs, 0x1f8010f4, (psxHu32(0x10f4) & 0xffffff) | 0x88000000);
 		//if (--cdrom_irq_counter == 0) // 0xa0009180
 		//	DeliverEvent(0xf0000003, 0x10);
 		use_cycles(22);
@@ -4468,7 +4468,7 @@ static void hleExcPadCard1(void)
 			psxBios_PAD_dr_();
 	}
 	if (loadRam32(A_PAD_ACK_VBL))
-		psxHwWrite16(0x1f801070, ~1);
+		psxHwWrite16(&psxRegs, 0x1f801070, ~1);
 	if (loadRam32(A_CARD_IRQR_ENA))
 		card_vint_handler();
 
@@ -4549,7 +4549,7 @@ static void hleDummy() {
 	psxRegs.pc = ra;
 	psxRegs.cycle += 1000;
 
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 static void hleA0() {
@@ -4568,7 +4568,7 @@ static void hleA0() {
 		biosA0[call]();
 
 	//printf("A(%02x) -> %x\n", call, v0);
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 static void hleB0() {
@@ -4592,7 +4592,7 @@ static void hleB0() {
 		biosB0[call]();
 
 	//printf("B(%02x) -> %x\n", call, v0);
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 static void hleC0() {
@@ -4611,7 +4611,7 @@ static void hleC0() {
 		biosC0[call]();
 
 	//printf("C(%02x) -> %x\n", call, v0);
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 static void hleA0t() {
@@ -4624,7 +4624,7 @@ static void hleA0t() {
 		biosA0[call]();
 
 	//printf("A(%02x) -> %x\n", call, v0);
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 static void hleB0t() {
@@ -4639,7 +4639,7 @@ static void hleB0t() {
 		biosB0[call]();
 
 	//printf("B(%02x) -> %x\n", call, v0);
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 static void hleC0t() {
@@ -4652,7 +4652,7 @@ static void hleC0t() {
 		biosC0[call]();
 
 	//printf("C(%02x) -> %x\n", call, v0);
-	psxBranchTest();
+	psxBranchTest(&psxRegs);
 }
 
 // currently not used

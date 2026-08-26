@@ -724,6 +724,7 @@ struct misc_save_data {
 	u32 frame_counter;
 	int CdromFrontendId;
 	u32 save_counter;
+	u32 reserved[32];
 };
 
 #define EX_SCREENPIC_SIZE (128 * 96 * 3)
@@ -746,7 +747,7 @@ int SaveState(const char *file) {
 
 	assert(!psxRegs.branching);
 	assert(!psxRegs.cpuInRecursion);
-	assert(!misc->magic);
+	assert(misc->magic == ~0);
 
 	f = SaveFuncs.open(file, "wb");
 	if (f == NULL) return -1;
@@ -761,6 +762,7 @@ int SaveState(const char *file) {
 	misc->frame_counter = frame_counter;
 	misc->CdromFrontendId = CdromFrontendId;
 	misc->save_counter = ++save_counter;
+	memset(misc->reserved, 0, sizeof(misc->reserved));
 
 	psxCpu->Notify(R3000ACPU_NOTIFY_BEFORE_SAVE, NULL);
 
@@ -819,7 +821,7 @@ int SaveState(const char *file) {
 	ndrc_freeze(f, 1);
 	padFreeze(f, 1);
 
-	memset(misc, 0, sizeof(*misc));
+	memset(misc, 0xff, sizeof(*misc));
 	SaveFuncs.close(f);
 	return 0;
 }
@@ -827,6 +829,7 @@ int SaveState(const char *file) {
 int LoadState(const char *file) {
 	struct misc_save_data *misc = (void *)(psxRegs.ptrs.psxH + 0xf000);
 	u32 biosBranchCheckOld = psxRegs.biosBranchCheck;
+	u32 oldCP0sr = psxRegs.CP0.n.SR;
 	union {
 		// save stack space
 		GPUFreeze_t gpu_hdr;
@@ -947,12 +950,14 @@ int LoadState(const char *file) {
 	events_restore();
 	if (Config.HLE)
 		psxBiosCheckExe(biosBranchCheckOld, 0x60, 1);
+	if ((oldCP0sr ^ psxRegs.CP0.n.SR) & (1u << 16))
+		psxMemOnIsolate((psxRegs.CP0.n.SR >> 16) & 1);
 
 	psxCpu->Notify(R3000ACPU_NOTIFY_AFTER_LOAD_STATE, NULL);
 
 	result = 0;
 cleanup:
-	memset(misc, 0, sizeof(*misc));
+	memset(misc, 0xff, sizeof(*misc));
 	SaveFuncs.close(f);
 	return result;
 }

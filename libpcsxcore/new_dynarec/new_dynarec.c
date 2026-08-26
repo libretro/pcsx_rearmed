@@ -198,6 +198,10 @@ struct regstat
   uint64_t u;
 };
 
+// the const tracking is very limited; if a handler (like mul) has no propagation
+// implemented it just clears 'isconst' for its sources and the "constness" is lost,
+// even when the const knowledge could be useful later
+
 struct ht_entry
 {
   u_int vaddr[2];
@@ -316,8 +320,6 @@ static struct compile_info
   static struct regstat branch_regs[MAXBLOCK];
   static struct code_stub stubs[MAXBLOCK];
   static int stubcount;
-  static u_int literals[1024][2];
-  static int literalcount;
   static u_int stop_after_jal;
   static u_int ni_count;
   static u_int err_print_count;
@@ -348,8 +350,10 @@ struct compile_state
   u_int *source;
   u_int start;
   int slen;
-  int is_delayslot;
   int linkcount;
+  int8_t is_delayslot;
+  int8_t maybe_cache_isolated;
+  int8_t unused[2];
   void *instr_addr[MAXBLOCK];
   struct link_entry link_addr[MAXBLOCK];
   uint64_t unneeded_reg[MAXBLOCK];
@@ -1538,7 +1542,6 @@ static const struct {
   FUNCNAME(new_dyna_leave),
   FUNCNAME(pcsx_mtc0),
   FUNCNAME(pcsx_mtc0_ds),
-  FUNCNAME(sio1ReadStat16),
   FUNCNAME(psxHwReadGpuSR),
   FUNCNAME(cdrRead0),
   FUNCNAME(cdrRead1),
@@ -3395,7 +3398,7 @@ static u_int resolve_const_io(int i, const struct regstat *i_regs, int *is_const
   }
   else if (is_ram_addr(addr))
     addr = *(u_int *)(psxRegs.ptrs.psxM + (addr & 0x1ffffc)) + cinfo[i].imm;
-  // this seems to do more hard than good, scratchpad data is just too volatile
+  // this seems to do more harm than good, scratchpad data is just too volatile
   //else if ((addr >> 10) == (0x1f800000u >> 10))
   //  addr = *(u_int *)(psxRegs.ptrs.psxH + (addr & 0x0003fc)) + cinfo[i].imm;
   else
@@ -3667,13 +3670,15 @@ static void store_assemble(struct compile_state *st, int i,
   u_int saddr_likely = 0;
   u_int saddr_const = resolve_const_io(i, i_regs, &c, &saddr_likely);
   int ram80x_io = (signed int)saddr_const < (signed int)(0x80000000 + RAM_SIZE);
-  int inline_slow_io = saddr_likely != 0;
+  int inline_slow_io = saddr_likely != 0 || st->maybe_cache_isolated;
   int tl = get_reg(i_regs->regmap, dops[i].rs2);
   assert(tl>=0);
   assert(addr_hr >= 0);
   if(i_regs->regmap[HOST_CCREG]==CCREG) reglist&=~(1<<HOST_CCREG);
   reglist |= 1u << addr_hr;
-  if (!c && !inline_slow_io) {
+  if (inline_slow_io)
+    /* no direct write */;
+  else if (!c) {
     addr_hr_io = addr_hr;
     jaddr = emit_fastpath_cmp_jump(st, i, i_regs, addr_hr,
               &offset_reg, &addr_hr_io, ccadj_);
@@ -3710,10 +3715,12 @@ static void store_assemble(struct compile_state *st, int i,
   else if (inline_slow_io)
     do_write_slow(st, i, i_regs, type, NULL, addr_hr, ccadj_, reglist, 1);
 
-  if ((!c && !inline_slow_io) || is_ram_addr(saddr_const))
-    do_store_smc_check(st, i, i_regs, reglist, addr_hr);
-  if (c && !ram80x_io)
-    inline_writestub(type, i, saddr_const, i_regs->regmap, dops[i].rs2, ccadj_, reglist);
+  if (!inline_slow_io) {
+    if (!c || is_ram_addr(saddr_const))
+      do_store_smc_check(st, i, i_regs, reglist, addr_hr);
+    if (c && !ram80x_io)
+      inline_writestub(type, i, saddr_const, i_regs->regmap, dops[i].rs2, ccadj_, reglist);
+  }
   // basic current block modification detection...
   // not looking back as that should be in mips cache already
   // (see Spyro2 title->attract mode)
@@ -3868,6 +3875,11 @@ static void cop0_assemble(struct compile_state *st, int i,
     char copr=(st->source[i]>>11)&0x1f;
     assert(s>=0);
     wb_register(dops[i].rs1,i_regs->regmap,i_regs->dirty);
+    if (copr == 12) {
+      // set it for the whole remainder of the block due to poor constant propagation
+      if (s >= 0 && ((i_regs->wasconst >> s) & 1))
+        st->maybe_cache_isolated |= (constmap[i][s] >> 16) & 1;
+    }
     if (copr == 12 || copr == 13) {
       emit_readword(&last_count,HOST_TEMPREG);
       if (cc != HOST_CCREG)
@@ -6390,6 +6402,7 @@ static void sjump_assemble(struct compile_state *st, int i, const struct regstat
         load_reg(regs[i].regmap,branch_regs[i].regmap,ROREG);
       load_regs(regs[i].regmap,branch_regs[i].regmap,CCREG,INVCP);
       ds_assemble(st, i+1, &branch_regs[i]);
+      drc_dbg_emit_wb_dirtys(i+1, &branch_regs[i]);
       cc=get_reg(branch_regs[i].regmap,CCREG);
       if(cc==-1) {
         emit_loadreg(CCREG,cc=HOST_CCREG);
@@ -6630,7 +6643,6 @@ void new_dynarec_clear_full(void)
   memset(invalid_code,1,sizeof(invalid_code));
   hash_table_clear();
   mini_ht_clear();
-  literalcount=0;
   stop_after_jal=0;
   ni_count=0;
   err_print_count=0;
@@ -8366,7 +8378,7 @@ static noinline void pass4_cull_unused_regs(struct compile_state *st)
   for (i = st->slen - 1; i >= 0; i--)
   {
     int hr;
-    __builtin_prefetch(regs[i-2].regmap);
+    if (i > 1) __builtin_prefetch(regs[i-2].regmap);
     if(dops[i].is_jump)
     {
       if(cinfo[i].ba<st->start || cinfo[i].ba>=(st->start+st->slen*4))
@@ -9072,7 +9084,7 @@ static noinline void pass6_clean_registers_r(struct compile_state *st,
     u_int hr_candirty = 0;
     assert(HOST_REGS < 32);
     make_rregs(regs[i].regmap, rregmap_i, &hr_candirty);
-    __builtin_prefetch(regs[i-1].regmap);
+    if (i) __builtin_prefetch(regs[i-1].regmap);
     if(dops[i].is_jump)
     {
       signed char branch_rregmap_i[RRMAP_SIZE];
@@ -9602,6 +9614,7 @@ static int noinline new_recompile_block(u_int addr)
     }
     return -1;
   }
+  arch_begin_block();
 
   // this is just for speculation
   for (i = 1; i < 32; i++) {
@@ -9726,6 +9739,7 @@ static int noinline new_recompile_block(u_int addr)
   st.linkcount = 0;
   stubcount = 0;
   st.is_delayslot = 0;
+  st.maybe_cache_isolated = 0;
   u_int dirty_pre = 0;
   u_char *beginning = start_block(MAX_OUTPUT_BLOCK_SIZE);
   void *instr_addr0_override = NULL;

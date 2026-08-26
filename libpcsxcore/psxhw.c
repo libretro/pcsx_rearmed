@@ -29,13 +29,18 @@
 #include "../include/compiler_features.h"
 
 void psxHwReset() {
-	memset(psxRegs.ptrs.psxH, 0, 0x10000);
+	memset(psxRegs.ptrs.psxH, 0, 0x2000);
+	memset(psxRegs.ptrs.psxH + 0x2000, 0xff, 0xe000);
 
-	mdecInit(); // initialize mdec decoder
+	mdecInit();
 	cdrReset();
 	sioReset();
 	psxRcntInit();
 	HW_GPU_STATUS = SWAP32(0x10802000);
+
+	// SIO_STAT: Armored Core, F1 Link cable misdetection
+	// (reset value is 0x805 according to nochash?)
+	psxHu16ref(0x1054) = SWAPu16(0x01a5);
 }
 
 void psxHwWriteIstat(u32 value)
@@ -156,43 +161,45 @@ u32 psxHwReadGpuSR(void)
 	return v;
 }
 
-u32 sio1ReadStat16(void)
-{
-	// Armored Core, F1 Link cable misdetection
-	return 0xa0;
-}
-
-u8 psxHwRead8(u32 add) {
+u8 psxHwRead8(psxRegisters *regs, u32 add) {
+	u32 ofs = add & 0xffff;
 	u8 hard;
 
-	switch (add & 0xffff) {
+	switch (ofs) {
 	case 0x1040: hard = sioRead8(); break;
 	case 0x1800: hard = cdrRead0(); break;
 	case 0x1801: hard = cdrRead1(); break;
 	case 0x1802: hard = cdrRead2(); break;
 	case 0x1803: hard = cdrRead3(); break;
+	// 16bit regs (rarely used)
+	//case 0x1044: hard = sioReadStat16()       ; break;
+	//case 0x1045: hard = sioReadStat16()   >> 8; break;
+	case 0x1100: hard = psxRcntRcount0()      ; break;
+	case 0x1101: hard = psxRcntRcount0()  >> 8; break;
+	case 0x1104: hard = psxRcntRmode(0)       ; break;
+	case 0x1105: hard = psxRcntRmode(0)   >> 8; break;
+	case 0x1108: hard = psxRcntRtarget(0)     ; break;
+	case 0x1109: hard = psxRcntRtarget(0) >> 8; break;
+	case 0x1110: hard = psxRcntRcount1()      ; break;
+	case 0x1111: hard = psxRcntRcount1()  >> 8; break;
+	case 0x1114: hard = psxRcntRmode(1)       ; break;
+	case 0x1115: hard = psxRcntRmode(1)   >> 8; break;
+	case 0x1118: hard = psxRcntRtarget(1)     ; break;
+	case 0x1119: hard = psxRcntRtarget(1) >> 8; break;
+	case 0x1120: hard = psxRcntRcount2()      ; break;
+	case 0x1121: hard = psxRcntRcount2()  >> 8; break;
+	case 0x1124: hard = psxRcntRmode(2)       ; break;
+	case 0x1125: hard = psxRcntRmode(2)   >> 8; break;
+	case 0x1128: hard = psxRcntRtarget(2)     ; break;
+	case 0x1129: hard = psxRcntRtarget(2) >> 8; break;
 
 	case 0x1041: case 0x1042: case 0x1043:
-	case 0x1044: case 0x1045:
 	case 0x1046: case 0x1047:
-	case 0x1048: case 0x1049:
-	case 0x104a: case 0x104b:
 	case 0x104c: case 0x104d:
-	case 0x104e: case 0x104f:
 	case 0x1050: case 0x1051:
-	case 0x1054: case 0x1055:
 	case 0x1058: case 0x1059:
 	case 0x105a: case 0x105b:
 	case 0x105c: case 0x105d:
-	case 0x1100: case 0x1101:
-	case 0x1104: case 0x1105:
-	case 0x1108: case 0x1109:
-	case 0x1110: case 0x1111:
-	case 0x1114: case 0x1115:
-	case 0x1118: case 0x1119:
-	case 0x1120: case 0x1121:
-	case 0x1124: case 0x1125:
-	case 0x1128: case 0x1129:
 	case 0x1810: case 0x1811:
 	case 0x1812: case 0x1813:
 	case 0x1814: case 0x1815:
@@ -201,31 +208,28 @@ u8 psxHwRead8(u32 add) {
 	case 0x1822: case 0x1823:
 	case 0x1824: case 0x1825:
 	case 0x1826: case 0x1827:
-		log_unhandled("unhandled r8  %08x @%08x\n", add, psxRegs.pc);
+		log_unhandled("unhandled r8  %08x @%08x\n", add, regs->pc);
 		// falthrough
 	default:
-		if (0x1f801c00 <= add && add < 0x1f802000) {
-			u16 val = SPU_readRegister(add & ~1, psxRegs.cycle);
+		if (0x1c00 <= ofs && ofs < 0x2000) {
+			u16 val = SPU_readRegister(add & ~1, regs->cycle);
 			hard = (add & 1) ? val >> 8 : val;
 			break;
 		}
-		hard = psxHu8(add);
+		hard = psxHu8_(regs, ofs);
 	}
 
-	//printf("r8  %08x       %02x @%08x\n", add, hard, psxRegs.pc);
+	//printf("r8  %08x       %02x @%08x\n", add, hard, regs->pc);
 	return hard;
 }
 
-u16 psxHwRead16(u32 add) {
-	unsigned short hard;
+u16 psxHwRead16(psxRegisters *regs, u32 add) {
+	u32 ofs = add & 0xffff;
+	u16 hard;
 
-	switch (add & 0xffff) {
+	switch (ofs) {
 	case 0x1040: hard = sioRead8(); break;
-	case 0x1044: hard = sioReadStat16(); break;
-	case 0x1048: hard = sioReadMode16(); break;
-	case 0x104a: hard = sioReadCtrl16(); break;
-	case 0x104e: hard = sioReadBaud16(); break;
-	case 0x1054: hard = sio1ReadStat16(); break;
+	//case 0x1044: hard = sioReadStat16(); break;
 	case 0x1100: hard = psxRcntRcount0(); break;
 	case 0x1104: hard = psxRcntRmode(0); break;
 	case 0x1108: hard = psxRcntRtarget(0); break;
@@ -253,26 +257,27 @@ u16 psxHwRead16(u32 add) {
 	case 0x1822:
 	case 0x1824:
 	case 0x1826:
-		log_unhandled("unhandled r16 %08x @%08x\n", add, psxRegs.pc);
+		log_unhandled("unhandled r16 %08x @%08x\n", add, regs->pc);
 		// falthrough
 	default:
-		if (0x1f801c00 <= add && add < 0x1f802000) {
-			hard = SPU_readRegister(add, psxRegs.cycle);
+		if (0x1c00 <= ofs && ofs < 0x2000) {
+			hard = SPU_readRegister(add, regs->cycle);
 			break;
 		}
-		hard = psxHu16(add);
+		hard = psxHu16_(regs, ofs);
 	}
 	
-	//printf("r16 %08x     %04x @%08x\n", add, hard, psxRegs.pc);
+	//printf("r16 %08x     %04x @%08x\n", add, hard, regs->pc);
 	return hard;
 }
 
-u32 psxHwRead32(u32 add) {
+u32 psxHwRead32(psxRegisters *regs, u32 add) {
+	u32 ofs = add & 0xffff;
 	u32 hard;
 
-	switch (add & 0xffff) {
+	switch (ofs) {
 	case 0x1040: hard = sioRead8(); break;
-	case 0x1044: hard = sioReadStat16(); break;
+	//case 0x1044: hard = sioReadStat16(); break;
 	case 0x1100: hard = psxRcntRcount0(); break;
 	case 0x1104: hard = psxRcntRmode(0); break;
 	case 0x1108: hard = psxRcntRtarget(0); break;
@@ -290,26 +295,26 @@ u32 psxHwRead32(u32 add) {
 	case 0x1048:
 	case 0x104c:
 	case 0x1050:
-	case 0x1054:
 	case 0x1058:
 	case 0x105c:
 	case 0x1800:
-		log_unhandled("unhandled r32 %08x @%08x\n", add, psxRegs.pc);
+		log_unhandled("unhandled r32 %08x @%08x\n", add, regs->pc);
 		// falthrough
 	default:
-		if (0x1f801c00 <= add && add < 0x1f802000) {
-			hard = SPU_readRegister(add, psxRegs.cycle);
-			hard |= SPU_readRegister(add + 2, psxRegs.cycle) << 16;
+		if (0x1c00 <= ofs && ofs < 0x2000) {
+			hard = SPU_readRegister(add, regs->cycle);
+			hard |= SPU_readRegister(add + 2, regs->cycle) << 16;
 			break;
 		}
-		hard = psxHu32(add);
+		hard = psxHu32_(regs, ofs);
 	}
-	//printf("r32 %08x %08x @%08x\n", add, hard, psxRegs.pc);
+	//printf("r32 %08x %08x @%08x\n", add, hard, regs->pc);
 	return hard;
 }
 
-void psxHwWrite8(u32 add, u32 value) {
-	switch (add & 0xffff) {
+void psxHwWrite8(psxRegisters *regs, u32 add, u32 value) {
+	u32 ofs = add & 0xffff;
+	switch (ofs) {
 	case 0x1040: sioWrite8(value); return;
 	case 0x10f6:
 		// nocash documents it as forced w32, but still games use this?
@@ -318,29 +323,35 @@ void psxHwWrite8(u32 add, u32 value) {
 	case 0x1801: cdrWrite1(value); return;
 	case 0x1802: cdrWrite2(value); return;
 	case 0x1803: cdrWrite3(value); return;
-	case 0x2041: break; // "POST (external 7 segment display)"
+
+	case 0x1044: case 0x1045: case 0x1046: case 0x1047:
+	case 0x1054: case 0x1055: case 0x1056: case 0x1057:
+		log_unhandled("ro w8  %08x %08x @%08x\n", add, value, regs->pc);
+		// fallthrough
+	case 0x2041: // "POST (external 7 segment display)"
+		return;
 
 	default:
-		if (0x1f801c00 <= add && add < 0x1f802000) {
-			log_unhandled("spu w8 %02x @%08x\n", value, psxRegs.pc);
+		if (0x1c00 <= ofs && ofs < 0x2000) {
+			log_unhandled("spu w8 %02x @%08x\n", value, regs->pc);
 			if (!(add & 1))
-				SPU_writeRegister(add, value, psxRegs.cycle);
+				SPU_writeRegister(add, value, regs->cycle);
 			return;
 		}
 		else
 			log_unhandled("unhandled w8  %08x %08x @%08x\n",
-				add, value, psxRegs.pc);
+				add, value, regs->pc);
 	}
-	psxHu8(add) = value;
+	if (ofs < 0x2000)
+		psxHu8ref_(regs, ofs) = value;
 }
 
-void psxHwWrite16(u32 add, u32 value) {
-	switch (add & 0xffff) {
+void psxHwWrite16(psxRegisters *regs, u32 add, u32 value) {
+	u32 ofs = add & 0xffff;
+	switch (ofs) {
 	case 0x1040: sioWrite8(value); return;
-	case 0x1044: sioWriteStat16(value); return;
 	case 0x1048: sioWriteMode16(value); return;
 	case 0x104a: sioWriteCtrl16(value); return;
-	case 0x104e: sioWriteBaud16(value); return;
 	case 0x1070: psxHwWriteIstat(value); return;
 	case 0x1074: psxHwWriteImask(value); return;
 	case 0x1100: psxRcntWcount(0, value); return;
@@ -379,37 +390,44 @@ void psxHwWrite16(u32 add, u32 value) {
 	case 0x10c0:
 	case 0x10d0:
 	case 0x10e0:
-		psxHu32ref(add) = SWAPu32(value);
+		psxHu32ref_(regs, ofs) = SWAPu32(value);
 		return;
 
-	case 0x1800:
-	case 0x1802:
-	case 0x1810:
-	case 0x1812:
-	case 0x1814:
-	case 0x1816:
-	case 0x1820:
-	case 0x1822:
-	case 0x1824:
-	case 0x1826:
-		log_unhandled("unhandled w16 %08x @%08x\n", add, psxRegs.pc);
+	case 0x1044: case 0x1046:
+	case 0x1054: case 0x1056:
+		log_unhandled("ro w16 %08x %08x @%08x\n", add, value, regs->pc);
+		return;
+
+	case 0x104e:
+		break;
+	case 0x104c:
+	case 0x1050:
+	case 0x1058: case 0x105a: case 0x105c: case 0x105e:
+	case 0x1800: case 0x1802:
+	case 0x1810: case 0x1812: case 0x1814: case 0x1816:
+	case 0x1820: case 0x1822: case 0x1824: case 0x1826:
+		log_unhandled("unhandled w16 %08x @%08x\n", add, regs->pc);
 		break;
 
 	default:
-		if (0x1f801c00 <= add && add < 0x1f802000) {
-			SPU_writeRegister(add, value, psxRegs.cycle);
+		if (0x1c00 <= ofs && ofs < 0x2000) {
+			SPU_writeRegister(add, value, regs->cycle);
 			return;
 		}
-		else if (0x1f801000 <= add && add < 0x1f801800)
+		else if (0x1000 <= ofs && ofs < 0x1800)
 			log_unhandled("unhandled w16 %08x %08x @%08x\n",
-				add, value, psxRegs.pc);
+				add, value, regs->pc);
 	}
-	psxHu16ref(add) = SWAPu16(value);
+	if (ofs < 0x2000)
+		psxHu16ref_(regs, ofs) = SWAPu16(value);
 }
 
-void psxHwWrite32(u32 add, u32 value) {
-	switch (add & 0xffff) {
+void psxHwWrite32(psxRegisters *regs, u32 add, u32 value) {
+	u32 ofs = add & 0xffff;
+	switch (ofs) {
 	case 0x1040: sioWrite8(value); return;
+	case 0x1048: log_unhandled("w32 %08x %08x @%08x\n", add, value, regs->pc);
+	             sioWriteMode16(value); return;  // and not to 104a?
 	case 0x1070: psxHwWriteIstat(value); return;
 	case 0x1074: psxHwWriteImask(value); return;
 	case 0x1088: // DMA0 chcr (MDEC in DMA)
@@ -444,28 +462,29 @@ void psxHwWrite32(u32 add, u32 value) {
 
 	case 0x1060:
 		if ((value >> 9) != 5)
-			log_unhandled("unhandled RAM_SIZE %08x @%08x\n", value, psxRegs.pc);
+			log_unhandled("unhandled RAM_SIZE %08x @%08x\n", value, regs->pc);
 		break;
 
 	case 0x1044:
-	case 0x1048:
-	case 0x104c:
-	case 0x1050:
 	case 0x1054:
-	case 0x1058:
-	case 0x105c:
+		log_unhandled("ro w32 %08x %08x @%08x\n", add, value, regs->pc);
+		return;
+
+	case 0x104c:
+	case 0x1050: case 0x1058: case 0x105c:
 	case 0x1800:
-		log_unhandled("unhandled w32 %08x %08x @%08x\n", add, value, psxRegs.pc);
+		log_unhandled("unhandled w32 %08x %08x @%08x\n", add, value, regs->pc);
 		break;
 
 	default:
-		if (0x1f801c00 <= add && add < 0x1f802000) {
-			SPU_writeRegister(add, value&0xffff, psxRegs.cycle);
-			SPU_writeRegister(add + 2, value>>16, psxRegs.cycle);
+		if (0x1c00 <= ofs && ofs < 0x2000) {
+			SPU_writeRegister(add, value & 0xffff, regs->cycle);
+			SPU_writeRegister(add + 2, value >> 16, regs->cycle);
 			return;
 		}
 	}
-	psxHu32ref(add) = SWAPu32(value);
+	if (ofs < 0x2000)
+		psxHu32ref_(regs, ofs) = SWAPu32(value);
 }
 
 int psxHwFreeze(void *f, int Mode) {

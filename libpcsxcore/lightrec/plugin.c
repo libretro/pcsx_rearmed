@@ -126,7 +126,7 @@ static void hw_write_byte(struct lightrec_state *state,
 {
 	lightrec_tansition_to_pcsx(state);
 
-	psxHwWrite8(mem, val);
+	psxHwWrite8(&psxRegs, mem, val);
 
 	lightrec_tansition_from_pcsx(state);
 }
@@ -136,7 +136,7 @@ static void hw_write_half(struct lightrec_state *state,
 {
 	lightrec_tansition_to_pcsx(state);
 
-	psxHwWrite16(mem, val);
+	psxHwWrite16(&psxRegs, mem, val);
 
 	lightrec_tansition_from_pcsx(state);
 }
@@ -146,7 +146,7 @@ static void hw_write_word(struct lightrec_state *state,
 {
 	lightrec_tansition_to_pcsx(state);
 
-	psxHwWrite32(mem, val);
+	psxHwWrite32(&psxRegs, mem, val);
 
 	lightrec_tansition_from_pcsx(state);
 }
@@ -157,7 +157,7 @@ static u8 hw_read_byte(struct lightrec_state *state, u32 op, void *host, u32 mem
 
 	lightrec_tansition_to_pcsx(state);
 
-	val = psxHwRead8(mem);
+	val = psxHwRead8(&psxRegs, mem);
 
 	lightrec_tansition_from_pcsx(state);
 
@@ -171,7 +171,7 @@ static u16 hw_read_half(struct lightrec_state *state,
 
 	lightrec_tansition_to_pcsx(state);
 
-	val = psxHwRead16(mem);
+	val = psxHwRead16(&psxRegs, mem);
 
 	lightrec_tansition_from_pcsx(state);
 
@@ -186,7 +186,7 @@ static u32 hw_read_word(struct lightrec_state *state,
 
 	lightrec_tansition_to_pcsx(state);
 
-	val = psxHwRead32(mem);
+	val = psxHwRead32(&psxRegs, mem);
 
 	if (GPUSTATUS_POLLING_THRESHOLD > 0 && mem == 0x1f801814) {
 		diff = psxRegs.cycle - old_cycle;
@@ -196,7 +196,7 @@ static u32 hw_read_word(struct lightrec_state *state,
 		    && diff == old_cycle - oldold_cycle) {
 			while (psxRegs.next_interupt > psxRegs.cycle && val == old_gpusr) {
 				psxRegs.cycle += diff;
-				val = psxHwRead32(mem);
+				val = psxHwRead32(&psxRegs, mem);
 			}
 		}
 
@@ -314,86 +314,34 @@ static void lightrec_enable_ram(struct lightrec_state *state, bool enable)
 
 static bool lightrec_can_hw_direct(u32 kaddr, bool is_write, u8 size)
 {
+	kaddr &= 0xffff;
 	if (is_write && size != 32) {
 		// force32 so must go through handlers
-		if (0x1f801000 <= kaddr && kaddr < 0x1f801024)
+		if (0x1000 <= kaddr && kaddr < 0x1024)
 			return false;
-		if ((kaddr & 0x1fffff80) == 0x1f801080) // dma
+		if ((kaddr & 0xff80) == 0x1080) // dma
 			return false;
 	}
 
-	switch (size) {
-	case 8:
-		switch (kaddr) {
-		case 0x1f801040:
-		case 0x1f801050:
-		case 0x1f801800:
-		case 0x1f801801:
-		case 0x1f801802:
-		case 0x1f801803:
-			return false;
-		default:
-			return true;
-		}
-	case 16:
-		switch (kaddr) {
-		case 0x1f801040:
-		case 0x1f801044:
-		case 0x1f801048:
-		case 0x1f80104a:
-		case 0x1f80104e:
-		case 0x1f801050:
-		case 0x1f801054:
-		case 0x1f80105a:
-		case 0x1f80105e:
-		case 0x1f801100:
-		case 0x1f801104:
-		case 0x1f801108:
-		case 0x1f801110:
-		case 0x1f801114:
-		case 0x1f801118:
-		case 0x1f801120:
-		case 0x1f801124:
-		case 0x1f801128:
-			return false;
-		case 0x1f801070:
-		case 0x1f801074:
-			return !is_write;
-		default:
-			return kaddr < 0x1f801c00 || kaddr >= 0x1f801e00;
-		}
-	default:
-		switch (kaddr) {
-		case 0x1f801040:
-		case 0x1f801050:
-		case 0x1f801100:
-		case 0x1f801104:
-		case 0x1f801108:
-		case 0x1f801110:
-		case 0x1f801114:
-		case 0x1f801118:
-		case 0x1f801120:
-		case 0x1f801124:
-		case 0x1f801128:
-		case 0x1f801810:
-		case 0x1f801814:
-		case 0x1f801820:
-		case 0x1f801824:
-			return false;
-		case 0x1f801070:
-		case 0x1f801074:
-		case 0x1f801088:
-		case 0x1f801098:
-		case 0x1f8010a8:
-		case 0x1f8010b8:
-		case 0x1f8010c8:
-		case 0x1f8010e8:
-		case 0x1f8010f4:
-			return !is_write;
-		default:
-			return !is_write || kaddr < 0x1f801c00 || kaddr >= 0x1f801e00;
-		}
-	}
+	// io/fifo
+	if ((kaddr & 0xffec) == 0x1040 || // 1040, 1050
+	    (kaddr & 0xffc0) == 0x1100 ||
+	    (kaddr & 0xffc0) == 0x1800)
+		return false;
+
+	// need write handlers/read-only
+	if ((kaddr & 0xffe0) == 0x1040 ||
+	    (kaddr & 0xfff8) == 0x1070 ||
+	    (kaddr & 0xff88) == 0x1088 ||
+	    (kaddr & 0xfff0) == 0x10f0 ||
+	     kaddr >= 0x2000)
+		return !is_write;
+
+	// spu
+	if (0x1c00 <= kaddr && kaddr < 0x2000)
+		return false;
+
+	return true;
 }
 
 static const struct lightrec_ops lightrec_ops = {

@@ -135,13 +135,13 @@ void psxException(u32 cause, enum R3000Abdt bdt, psxCP0Regs *cp0) {
 	cp0->n.SR = (cp0->n.SR & ~0x3f) | ((cp0->n.SR & 0x0f) << 2);
 }
 
-void psxBranchTest() {
-	if ((psxRegs.cycle - psxRegs.psxNextsCounter) >= psxRegs.psxNextCounter)
+void psxBranchTest(psxRegisters *regs) {
+	if ((regs->cycle - regs->psxNextsCounter) >= regs->psxNextCounter)
 		psxRcntUpdate();
 
-	irq_test(&psxRegs.CP0);
+	irq_test(&regs->CP0);
 
-	if (unlikely(psxRegs.pc == psxRegs.biosBranchCheck))
+	if (unlikely(regs->pc == regs->biosBranchCheck))
 		psxBiosCheckBranch();
 }
 

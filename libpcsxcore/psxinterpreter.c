@@ -102,7 +102,7 @@ static void dloadClear(psxRegisters *regs)
 
 static void intException(psxRegisters *regs, u32 pc, u32 cause)
 {
-	if (cause != 0x20) {
+	if (cause != (R3000E_Syscall << 2)) {
 		//FILE *f = fopen("/tmp/psx_ram.bin", "wb");
 		//fwrite(psxRegs.ptrs.psxM, 1, 0x200000, f); fclose(f);
 		log_unhandled("exception %08x @%08x ra=%08x\n",
@@ -112,6 +112,7 @@ static void intException(psxRegisters *regs, u32 pc, u32 cause)
 	regs->pc = pc;
 	psxException(cause, regs->branching, &regs->CP0);
 	regs->branching = R3000A_BRANCH_NONE_OR_EXCEPTION;
+	psxBranchTest(regs);
 }
 
 // exception caused by current instruction (excluding unkasking)
@@ -421,7 +422,7 @@ static void doBranch(psxRegisters *regs, u32 tar, enum R3000Abdt taken) {
 			psxDoDelayBranch(regs, tar, code);
 		log_unhandled("branch in DS: %08x->%08x\n", pc, regs->pc);
 		regs->branching = 0;
-		psxBranchTest();
+		psxBranchTest(regs);
 		return;
 	}
 
@@ -434,7 +435,7 @@ static void doBranch(psxRegisters *regs, u32 tar, enum R3000Abdt taken) {
 		regs->CP0.n.Target = pc_final;
 	regs->branching = 0;
 
-	psxBranchTest();
+	psxBranchTest(regs);
 }
 
 static void doBranchReg(psxRegisters *regs, u32 tar) {

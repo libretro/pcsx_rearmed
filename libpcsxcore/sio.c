@@ -63,25 +63,24 @@ static int64_t McdFileSize(const char *path) {
 #define IRQ			0x0200
 
 // Control Flags
-#define TX_PERM		0x0001
-#define DTR			0x0002
-#define RX_PERM		0x0004
-#define BREAK		0x0008
-#define RESET_ERR	0x0010
-#define RTS			0x0020
-#define SIO_RESET	0x0040
+#define CTRL_TXEN     0x0001
+#define CTRL_SEL      0x0002
+#define CTRL_RXEN     0x0004 // "force"
+#define CTRL_ACK      0x0010
+#define CTRL_RESET    0x0040
+#define CTRL_RX_IRQ   0x0800
+#define CTRL_ACK_IRQ  0x1000
+#define CTRL_SLOT2    0x2000
+
+#define StatReg psxHu16ref(0x1044)
+#define ModeReg psxHu16ref(0x1048)
+#define CtrlReg psxHu16ref(0x104a)
+#define BaudReg psxHu16ref(0x104e)
 
 // *** FOR WORKS ON PADS AND MEMORY CARDS *****
 
 static unsigned char buf[256];
 static const unsigned char cardh[4] = { 0xff, 0x08, 0x5a, 0x5d };
-
-// Transfer Ready and the Buffer is Empty
-// static unsigned short StatReg = 0x002b;
-static unsigned short StatReg = TX_RDY | TX_EMPTY;
-static unsigned short ModeReg;
-static unsigned short CtrlReg;
-static unsigned short BaudReg;
 
 static unsigned int bufcount;
 static unsigned int parp;
@@ -100,17 +99,18 @@ unsigned char McdFlag[2];
 #define SIO_CYCLES		535
 
 void sioWrite8(unsigned char value) {
-	int port = (CtrlReg >> 13) & 1, more_data = 0;
+	u16 ctrl = SWAPu16(CtrlReg);
+	int port = (ctrl >> 13) & 1, more_data = 0;
 #if 0
 	s32 framec = psxRegs.cycle - rcnts[3].cycleStart;
-	printf("%d:%03d sio write8    %04x %02x\n", frame_counter,
-		(s32)(framec / (PSXCLK / 60 / 263.0f)), CtrlReg, value);
+	printf("%d:%03d sio write8    %04x %02x st=%d,%d\n", frame_counter,
+		(s32)(framec / (PSXCLK / 60 / 263.0f)), ctrl, value, padst, mcdst);
 #endif
 	switch (padst) {
 		case 1:
 			if ((value & 0x40) == 0x40) {
 				padst = 2; parp = 1;
-				switch (CtrlReg & 0x2002) {
+				switch (ctrl & 0x2002) {
 					case 0x0002:
 						buf[parp] = PAD1_poll(value, &more_data);
 						break;
@@ -127,14 +127,17 @@ void sioWrite8(unsigned char value) {
 			else padst = 0;
 			return;
 		case 2:
-			parp++;
-			switch (CtrlReg & 0x2002) {
+			if (parp < 255)
+				parp++;
+			switch (ctrl & 0x2002) {
 				case 0x0002: buf[parp] = PAD1_poll(value, &more_data); break;
 				case 0x2002: buf[parp] = PAD2_poll(value, &more_data); break;
 			}
 
-			if (more_data) {
+			if (more_data)
 				bufcount = parp + 1;
+			if (((ctrl & CTRL_ACK_IRQ) && more_data) ||
+			     (ctrl & CTRL_RX_IRQ)) {
 				set_event(PSXINT_SIO, SIO_CYCLES);
 			}
 			return;
@@ -176,7 +179,7 @@ void sioWrite8(unsigned char value) {
 					buf[1] = 0x5d;
 					buf[2] = adrH;
 					buf[3] = adrL;
-					switch (CtrlReg & 0x2002) {
+					switch (ctrl & 0x2002) {
 						case 0x0002:
 							memcpy(&buf[4], Mcd1Data + (adrL | (adrH << 8)) * 128, 128);
 							break;
@@ -221,9 +224,9 @@ void sioWrite8(unsigned char value) {
 
 	switch (value) {
 		case 0x01: // start pad
-			StatReg |= RX_RDY;		// Transfer is Ready
+			StatReg |= SWAPu16(RX_RDY);		// Transfer is Ready
 
-			switch (CtrlReg & 0x2002) {
+			switch (ctrl & 0x2002) {
 				case 0x0002: buf[0] = PAD1_startPoll(); break;
 				case 0x2002: buf[0] = PAD2_startPoll(); break;
 			}
@@ -237,7 +240,7 @@ void sioWrite8(unsigned char value) {
 				goto no_device;
 			memcpy(buf, cardh, 4);
 			buf[1] = McdFlag[port];
-			StatReg |= RX_RDY;
+			StatReg |= SWAPu16(RX_RDY);
 			parp = 0;
 			bufcount = 3;
 			mcdst = 1;
@@ -246,7 +249,7 @@ void sioWrite8(unsigned char value) {
 			return;
 		default:
 		no_device:
-			StatReg |= RX_RDY;
+			StatReg |= SWAPu16(RX_RDY);
 			buf[0] = 0xff;
 			parp = 0;
 			bufcount = 0;
@@ -254,39 +257,38 @@ void sioWrite8(unsigned char value) {
 	}
 }
 
-void sioWriteStat16(unsigned short value) {
-}
-
 void sioWriteMode16(unsigned short value) {
-	ModeReg = value;
+	ModeReg = SWAPu16(value & 0x013f);
 }
 
 void sioWriteCtrl16(unsigned short value) {
-	CtrlReg = value & ~RESET_ERR;
-	if (value & RESET_ERR) StatReg &= ~IRQ;
-	if ((CtrlReg & SIO_RESET) || !(CtrlReg & DTR)) {
+#if 0
+	s32 framec = psxRegs.cycle - rcnts[3].cycleStart;
+	printf("%d:%03d sio ctrl      %04x->%04x\n", frame_counter,
+		(s32)(framec / (PSXCLK / 60 / 263.0f)), CtrlReg, value);
+#endif
+	if (value & CTRL_ACK) StatReg &= SWAPu16(~IRQ);
+	if ((value & CTRL_RESET) || !(value & CTRL_SEL)) {
 		padst = 0; mcdst = 0; parp = 0;
-		StatReg = TX_RDY | TX_EMPTY;
+		StatReg = SWAPu16(TX_RDY | TX_EMPTY);
 		psxRegs.interrupt &= ~(1 << PSXINT_SIO);
 	}
-}
-
-void sioWriteBaud16(unsigned short value) {
-	BaudReg = value;
+	CtrlReg = SWAPu16(value & 0x3f2f);
 }
 
 unsigned char sioRead8() {
-	unsigned char ret = 0;
+	u16 ctrl = SWAPu16(CtrlReg);
+	u8 ret = 0;
 
-	if ((StatReg & RX_RDY)/* && (CtrlReg & RX_PERM)*/) {
-//		StatReg &= ~RX_OVERRUN;
+	if (StatReg & SWAPu16(RX_RDY)) {
+//		StatReg &= SWAPu16(~RX_OVERRUN);
 		ret = buf[parp];
 		if (parp == bufcount) {
-			StatReg &= ~RX_RDY;		// Receive is not Ready now
+			StatReg &= SWAPu16(~RX_RDY);	// Receive is not Ready now
 			if (mcdst == 5) {
 				mcdst = 0;
 				if (rdwr == 2) {
-					switch (CtrlReg & 0x2002) {
+					switch (ctrl & 0x2002) {
 						case 0x0002:
 							memcpy(Mcd1Data + (adrL | (adrH << 8)) * 128, &buf[1], 128);
 							SaveMcd(Config.Mcd1, Mcd1Data, (adrL | (adrH << 8)) * 128, 128);
@@ -301,7 +303,7 @@ unsigned char sioRead8() {
 			if (padst == 2) padst = 0;
 			if (mcdst == 1) {
 				mcdst = 2;
-				StatReg|= RX_RDY;
+				StatReg |= SWAPu16(RX_RDY);
 			}
 		}
 	}
@@ -309,34 +311,27 @@ unsigned char sioRead8() {
 #if 0
 	s32 framec = psxRegs.cycle - rcnts[3].cycleStart;
 	printf("%d:%03d sio read8  %2d %04x %02x\n", frame_counter,
-		(s32)((float)framec / (PSXCLK / 60 / 263.0f)), parp, CtrlReg, ret);
+		(s32)((float)framec / (PSXCLK / 60 / 263.0f)), parp, ctrl, ret);
 #endif
 	return ret;
 }
 
+#if 0
 unsigned short sioReadStat16() {
-	return StatReg;
+	s32 framec = psxRegs.cycle - rcnts[3].cycleStart;
+	printf("%d:%03d sio rd stat   %04x\n", frame_counter,
+		(s32)(framec / (PSXCLK / 60 / 263.0f)), StatReg);
+	return SWAPu16(StatReg);
 }
-
-unsigned short sioReadMode16() {
-	return ModeReg;
-}
-
-unsigned short sioReadCtrl16() {
-	return CtrlReg;
-}
-
-unsigned short sioReadBaud16() {
-	return BaudReg;
-}
+#endif
 
 void sioInterrupt() {
 #ifdef PAD_LOG
 	PAD_LOG("Sio Interrupt (CP0.Status = %x)\n", psxRegs.CP0.n.Status);
 #endif
 //	SysPrintf("Sio Interrupt\n");
-	if (!(StatReg & IRQ)) {
-		StatReg |= IRQ;
+	if (!(StatReg & SWAPu16(IRQ))) {
+		StatReg |= SWAPu16(IRQ);
 		psxHu32ref(0x1070) |= SWAPu32(0x80);
 	}
 }
@@ -767,15 +762,20 @@ void GetMcdBlockInfo(int mcd, int block, McdBlock *Info) {
 }
 
 void sioReset() {
+	StatReg = SWAPu16(TX_RDY | TX_EMPTY);
 	McdFlag[0] = McdFlag[1] = 8;
 }
 
 int sioFreeze(void *f, int Mode) {
+	u16 StatReg_ = SWAPu16(StatReg);
+	u16 ModeReg_ = SWAPu16(ModeReg);
+	u16 CtrlReg_ = SWAPu16(CtrlReg);
+	u16 BaudReg_ = SWAPu16(BaudReg);
 	gzfreeze(buf, sizeof(buf));
-	gzfreeze(&StatReg, sizeof(StatReg));
-	gzfreeze(&ModeReg, sizeof(ModeReg));
-	gzfreeze(&CtrlReg, sizeof(CtrlReg));
-	gzfreeze(&BaudReg, sizeof(BaudReg));
+	gzfreeze(&StatReg_, sizeof(StatReg_)); // compat
+	gzfreeze(&ModeReg_, sizeof(ModeReg_));
+	gzfreeze(&CtrlReg_, sizeof(CtrlReg_));
+	gzfreeze(&BaudReg_, sizeof(BaudReg_));
 	gzfreeze(&bufcount, sizeof(bufcount));
 	gzfreeze(&parp, sizeof(parp));
 	gzfreeze(&mcdst, sizeof(mcdst));
@@ -784,6 +784,10 @@ int sioFreeze(void *f, int Mode) {
 	gzfreeze(&adrL, sizeof(adrL));
 	gzfreeze(&padst, sizeof(padst));
 	if (Mode == 0) {
+		StatReg = SWAPu16(StatReg_);
+		ModeReg = SWAPu16(ModeReg_);
+		CtrlReg = SWAPu16(CtrlReg_);
+		BaudReg = SWAPu16(BaudReg_);
 		// card likely changed since the state save,
 		// let the game know
 		McdFlag[0] |= 8;

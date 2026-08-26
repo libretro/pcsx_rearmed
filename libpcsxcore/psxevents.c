@@ -78,7 +78,7 @@ void irq_test(psxCP0Regs *cp0)
 	}
 
 	cp0->n.Cause &= ~0x400;
-	if (psxHu32(0x1070) & psxHu32(0x1074))
+	if (psxHu32_(regs, 0x1070) & psxHu32_(regs, 0x1074))
 		cp0->n.Cause |= 0x400;
 	if (((cp0->n.Cause | 1) & cp0->n.SR & 0x401) == 0x401)
 		psxException(0, 0, cp0);
