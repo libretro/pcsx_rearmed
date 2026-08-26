@@ -316,7 +316,7 @@ endif
 # libchdr
 ifeq "$(HAVE_CHD)" "1"
 LCHDR = deps/libchdr
-LCHDR_LZMA = $(LCHDR)/deps/lzma-25.01
+LCHDR_LZMA = $(LCHDR)/deps/lzma-26.02
 LCHDR_ZSTD = $(LCHDR)/deps/zstd-1.5.7
 OBJS += $(LCHDR)/src/libchdr_bitstream.o
 OBJS += $(LCHDR)/src/libchdr_cdrom.o
@@ -348,7 +348,7 @@ endif
 
 # zlib/miniz
 ifeq ($(USE_MINIZ),1)
-MINIZ_DIR = deps/libchdr/deps/miniz-3.1.1
+MINIZ_DIR = deps/libchdr/deps/miniz-3.1.2
 CFLAGS += -I$(MINIZ_DIR) -DUSE_MINIZ
 OBJS += $(MINIZ_DIR)/miniz.o
 $(MINIZ_DIR)/miniz.o: CFLAGS += -DMINIZ_NO_STDIO -DMINIZ_NO_DEFLATE_APIS -DMINIZ_NO_ARCHIVE_APIS
