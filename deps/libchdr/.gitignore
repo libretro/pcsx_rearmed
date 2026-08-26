@@ -1,3 +1,7 @@
 *.o
 *.d
 build/
+build-rv32/
+tests/rv32/embed/
+tests/rv32/fw.elf
+tests/rv32/*.log

@@ -1,0 +1,75 @@
+name: RV32 RAM budget
+
+# Cross-compiles libchdr for RV32IMAFC/ilp32f (the Bouffalo Lab BL616's base
+# ISA/ABI - RV32IMAFCP, 480KB SRAM) and runs a peak-heap-per-codec probe under
+# qemu-system-riscv32. Guards against memory regressions like the LZMA
+# dict-size bug (a fixed hunkbytes-independent 256MB dict alloc) that this
+# workflow was added to catch.
+#
+# Built with -Os -flto (see cmake/toolchain-rv32imafc.cmake): -Os beats
+# -O2/-O3 for code size on this codebase (+18%/+31% measured), and -flto
+# saves another ~3% via cross-TU dead-code elimination - both measured and
+# CRC-verified correct under qemu-system-riscv32.
+#
+# Also builds with CHDR_LOWRAM_MAP=ON: replaces the fully-materialized
+# per-hunk map (12B/hunk for CHDv5, ~24B/hunk legacy - scales with total
+# hunk count, independent of codec/hunkbytes) with a checkpointed on-demand
+# decode. Barely visible on this workflow's tiny synthetic corpus (few
+# hunks/file), but on real full-size discs it's the dominant RAM cost -
+# measured 48-74% peak-heap reduction on real GD-ROM/UMD CHDs (naomi,
+# dreamcast, psp), CRC-verified byte-identical against the non-LOWRAM_MAP
+# build across sequential/reverse/random-order reads. Real-ROM validation
+# isn't reproducible in CI (copyrighted files), so this workflow's job is
+# proving LOWRAM_MAP=ON doesn't regress correctness or blow past budget on
+# what CI *can* see - the real-file numbers were measured locally.
+
+on: [push, pull_request]
+
+jobs:
+  rv32-ram-budget:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install RV32 toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf \
+            binutils-riscv64-unknown-elf qemu-system-misc mame-tools
+
+      - name: Configure (rv32imafc/ilp32f)
+        run: >
+          cmake -B build-rv32
+          -DCMAKE_TOOLCHAIN_FILE=${{github.workspace}}/cmake/toolchain-rv32imafc.cmake
+          -DBUILD_SHARED_LIBS=OFF -DINSTALL_STATIC_LIBS=OFF
+          -DCMAKE_BUILD_TYPE=MinSizeRel -DCHDR_LOWRAM_MAP=ON
+
+      - name: Build chdr-static
+        run: cmake --build build-rv32 --target chdr-static -j$(nproc)
+
+      - name: Generate corpus seeds (chdman)
+        run: tests/corpus/generate.sh
+
+      - name: Generate embedded corpus headers
+        run: tests/rv32/gen_embed.sh
+
+      - name: Build RAM-budget firmware
+        run: |
+          riscv64-unknown-elf-gcc -march=rv32imafc -mabi=ilp32f \
+            --specs=picolibc.specs --crt0=semihost --oslib=semihost \
+            -I include -I tests/rv32 -Os -flto \
+            -Wl,--wrap=malloc -Wl,--wrap=free -Wl,--wrap=realloc -Wl,--wrap=calloc \
+            -o tests/rv32/fw.elf tests/rv32/fw.c \
+            build-rv32/libchdr-static.a \
+            build-rv32/deps/lzma-25.01/libchdr-lzma.a \
+            build-rv32/deps/zstd-1.5.7/libzstd.a \
+            build-rv32/deps/miniz-3.1.1/libminiz.a
+
+      - name: Run under qemu-system-riscv32 and enforce RAM budget
+        run: |
+          timeout 60 qemu-system-riscv32 -M virt -nographic -bios none -semihosting -m 64M \
+            -kernel tests/rv32/fw.elf > rv32-ram.log 2>&1
+          cat rv32-ram.log
+          python3 tests/rv32/check_budget.py rv32-ram.log

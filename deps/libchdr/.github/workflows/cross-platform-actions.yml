@@ -6,6 +6,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         operating_system: [ dragonflybsd, freebsd, haiku, midnightbsd, netbsd, omnios, openbsd ]
         architecture: [ arm64, x86-64 ]
@@ -16,9 +17,9 @@ jobs:
               sudo pkg update
               sudo pkg install -y cmake ninja
           - operating_system: freebsd
-            version: '15.0'
+            version: '15.1'
             pkginstall: |
-              sudo pkg update
+              sudo pkg upgrade -y
               sudo pkg install -y cmake ninja
           - operating_system: haiku
             version: 'r1beta5'
@@ -31,7 +32,7 @@ jobs:
               sudo mport upgrade
               sudo mport install cmake ninja || true
           - operating_system: netbsd
-            version: '10.1'
+            version: '11.0'
             pkginstall: |
               sudo pkgin update
               sudo pkgin -y install clang cmake ninja-build
