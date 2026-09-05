@@ -99,7 +99,7 @@ int64_t rfseek(RFILE* stream, int64_t offset, int origin)
          break;
    }
 
-   return filestream_seek(stream, offset, seek_position);
+   return filestream_seek(stream, offset, seek_position) < 0 ? -1 : 0;
 }
 
 int64_t rfread(void* buffer,
