@@ -116,19 +116,25 @@ struct lightrec_mem_map {
 	const struct lightrec_mem_map *mirror_of;
 };
 
-struct lightrec_ops {
-	void (*cop2_notify)(struct lightrec_state *state, u32 op, u32 data);
-	void (*cop2_op)(struct lightrec_state *state, u32 op);
-	void (*enable_ram)(struct lightrec_state *state, _Bool enable);
-	_Bool (*hw_direct)(u32 kaddr, _Bool is_write, u8 size);
-	void (*code_inv)(void *addr, u32 len);
+struct lightrec_registers_cp2 {
+	u32 cp2d[32];
+	u32 cp2c[32];
 };
 
 struct lightrec_registers {
 	u32 gpr[34];
 	u32 cp0[32];
-	u32 cp2d[32];
-	u32 cp2c[32];
+	struct lightrec_registers_cp2 cp2;
+};
+
+typedef void (*lightrec_gte_handler_t)(struct lightrec_registers_cp2 *, u32 op);
+
+struct lightrec_ops {
+	void (*cop2_notify)(struct lightrec_state *state, u32 op, u32 data);
+	lightrec_gte_handler_t (*cop2_hdl)(u32 code, _Bool flagless);
+	void (*enable_ram)(struct lightrec_state *state, _Bool enable);
+	_Bool (*hw_direct)(u32 kaddr, _Bool is_write, u8 size);
+	void (*code_inv)(void *addr, u32 len);
 };
 
 __api struct lightrec_state *lightrec_init(char *argv0,

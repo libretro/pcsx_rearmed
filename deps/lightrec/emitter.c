@@ -2325,7 +2325,7 @@ static void rec_cp0_CTC0(struct lightrec_cstate *state,
 
 static unsigned int cp2d_i_offset(u8 reg)
 {
-	return lightrec_offset(regs.cp2d[reg]);
+	return lightrec_offset(regs.cp2.cp2d[reg]);
 }
 
 static unsigned int cp2d_s_offset(u8 reg)
@@ -2335,7 +2335,7 @@ static unsigned int cp2d_s_offset(u8 reg)
 
 static unsigned int cp2c_i_offset(u8 reg)
 {
-	return lightrec_offset(regs.cp2c[reg]);
+	return lightrec_offset(regs.cp2.cp2c[reg]);
 }
 
 static unsigned int cp2c_s_offset(u8 reg)
@@ -2659,6 +2659,45 @@ static void rec_CP(struct lightrec_cstate *state,
 	call_to_c_wrapper(state, block, c.opcode, C_WRAPPER_CP);
 }
 
+static void rec_cop_CP2(struct lightrec_cstate *state,
+		       const struct block *block, u16 offset)
+{
+	union code c = block->opcode_list[offset].c;
+	struct regcache *reg_cache = state->reg_cache;
+	jit_state_t *_jit = block->_jit;
+	lightrec_gte_handler_t hdl;
+	u8 tmp;
+
+	jit_name(__func__);
+	jit_note(__FILE__, __LINE__);
+
+	/* The cycle register is caller-saved, save it to our temp register */
+	tmp = lightrec_alloc_reg_out(reg_cache, _jit, REG_TEMP, REG_EXT);
+	jit_movr(tmp, LIGHTREC_REG_CYCLE);
+	lightrec_free_reg(reg_cache, tmp);
+
+	/* We're calling C, we need to unload caller-saved regs */
+	lightrec_unload_caller_saved_regs(reg_cache, _jit);
+
+	hdl = (*state->state->ops.cop2_hdl)(c.opcode, false);
+
+	jit_prepare();
+	jit_pushargi((intptr_t)&state->state->regs.cp2);
+	jit_pushargi(c.opcode);
+	jit_calli(hdl);
+
+	/* Move back our cycle value where it belongs */
+	if (lightrec_reg_is_loaded(reg_cache, REG_TEMP)) {
+		tmp = lightrec_alloc_reg_in(reg_cache, _jit, REG_TEMP, REG_EXT);
+		jit_movr(LIGHTREC_REG_CYCLE, tmp);
+		lightrec_free_reg(reg_cache, tmp);
+		lightrec_discard_reg_if_loaded(reg_cache, REG_TEMP);
+	} else {
+		jit_ldxi_i(LIGHTREC_REG_CYCLE, LIGHTREC_REG_STATE,
+			   lightrec_offset(temp_reg));
+	}
+}
+
 static void rec_meta_MOV(struct lightrec_cstate *state,
 			 const struct block *block, u16 offset)
 {
@@ -2966,7 +3005,7 @@ static const lightrec_rec_func_t rec_cp0[64] = {
 };
 
 static const lightrec_rec_func_t rec_cp2_basic[64] = {
-	SET_DEFAULT_ELM(rec_cp2_basic, rec_CP),
+	SET_DEFAULT_ELM(rec_cp2_basic, rec_cop_CP2),
 	[OP_CP2_BASIC_MFC2]	= rec_cp2_basic_MFC2,
 	[OP_CP2_BASIC_CFC2]	= rec_cp2_basic_CFC2,
 	[OP_CP2_BASIC_MTC2]	= rec_cp2_basic_MTC2,
@@ -3031,7 +3070,7 @@ static void rec_CP2(struct lightrec_cstate *state,
 		}
 	}
 
-	rec_CP(state, block, offset);
+	rec_cop_CP2(state, block, offset);
 }
 
 static void rec_META(struct lightrec_cstate *state,

@@ -610,6 +610,17 @@ void lightrec_clean_regs(struct regcache *cache, jit_state_t *_jit)
 	clean_regs(cache, _jit, true);
 }
 
+void lightrec_unload_caller_saved_regs(struct regcache *cache, jit_state_t *_jit)
+{
+	unsigned int i;
+
+	for (i = 0; i < NUM_TEMPS; i++) {
+		lightrec_unload_nreg(cache, _jit,
+				     &cache->lightrec_regs[i + NUM_REGS],
+				     JIT_R(FIRST_TEMP + i));
+	}
+}
+
 bool lightrec_has_dirty_regs(struct regcache *cache)
 {
 	unsigned int i;

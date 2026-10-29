@@ -1247,7 +1247,7 @@ static int lightrec_transform_ops(struct lightrec_state *state, struct block *bl
 				}
 
 				if (is_known(v, op->i.rs)
-				    && kunseg(v[op->i.rs].value) >> 28 == kunseg(block->pc) >> 28) {
+				    && v[op->i.rs].value >> 28 == block->pc >> 28) {
 					pr_debug("Convert JR to J\n");
 					op->j.imm = kunseg(v[op->i.rs].value) >> 2;
 					op->j.op = OP_J;
@@ -1262,7 +1262,7 @@ static int lightrec_transform_ops(struct lightrec_state *state, struct block *bl
 
 				if (is_known(v, op->r.rs)
 				    && op->r.rd == 31
-				    && kunseg(v[op->r.rs].value) >> 28 == kunseg(block->pc) >> 28) {
+				    && v[op->r.rs].value >> 28 == block->pc >> 28) {
 					pr_debug("Convert JALR to JAL\n");
 					op->j.imm = kunseg(v[op->i.rs].value) >> 2;
 					op->j.op = OP_JAL;
@@ -1506,6 +1506,14 @@ static int lightrec_swap_load_delays(struct lightrec_state *state,
 			if (has_delay_slot(next))
 				continue;
 
+			if (opcode_writes_register(next, c.i.rt)) {
+				/* Load opcode and the next opcode both write
+				 * the same register; only consider the second
+				 * write. */
+				block->opcode_list[i].i.rt = 0;
+				continue;
+			}
+
 			if (opcode_reads_register(next, c.i.rt)
 			    && !opcode_writes_register(next, c.i.rs)) {
 				pr_debug("Swapping opcodes at offset 0x%x to "
@@ -1596,7 +1604,7 @@ int lightrec_detect_idle(struct block *block)
 
 static int lightrec_local_branches(struct lightrec_state *state, struct block *block)
 {
-	const struct opcode *ds;
+	struct opcode *ds, *target;
 	struct opcode *list;
 	unsigned int i;
 	s32 offset;
@@ -1608,16 +1616,28 @@ static int lightrec_local_branches(struct lightrec_state *state, struct block *b
 			continue;
 
 		offset = i + 1 + (s16)list->c.i.imm;
+		target = &block->opcode_list[offset];
 
 		pr_debug("Found local branch to offset 0x%"PRIx32"\n", offset << 2);
 
-		ds = get_delay_slot(block->opcode_list, i);
+		ds = list + 1;
+
 		if (op_flag_load_delay(ds->flags) && opcode_has_load_delay(ds->c)) {
-			pr_debug("Branch delay slot has a load delay - skip\n");
-			continue;
+			/* The delay slot is a load - we can check whether or
+			 * not the opcode at the target uses the load's target
+			 * register. */
+
+			if (opcode_reads_register(target->c, ds->i.rt)) {
+				pr_debug("Branch delay slot has a load delay - skip\n");
+				continue;
+			}
+
+			/* No load dependency - drop the load delay flag */
+			pr_debug("Load delay in local branch delay slot removed\n");
+			ds->flags &= ~LIGHTREC_LOAD_DELAY;
 		}
 
-		if (should_emulate(&block->opcode_list[offset])) {
+		if (should_emulate(target)) {
 			pr_debug("Branch target must be emulated - skip\n");
 			continue;
 		}
