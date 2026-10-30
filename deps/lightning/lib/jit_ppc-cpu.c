@@ -43,6 +43,9 @@
 #    define fits_uint32_p(im)		((im & 0xffffffff00000000L) == 0)
 #  endif
 #  define fpr_save_area			64
+#  ifndef abi_slot_size
+#    define abi_slot_size		sizeof(jit_word_t)
+#  endif
 #  define alloca_offset			-(gpr_save_area + fpr_save_area)
 #  define ii(i)				*_jit->pc.ui++ = i
 #  if __WORDSIZE == 32
@@ -4156,7 +4159,7 @@ _prolog(jit_state_t *_jit, jit_node_t *node)
     if (_jitc->function->need_stack) {
 	offset = -gpr_save_area;
 	for (regno = 0; regno < jit_size(iregs);
-	     regno++, offset += sizeof(void*)) {
+	     regno++, offset += abi_slot_size) {
 	    if (jit_regset_tstbit(&_jitc->function->regset, iregs[regno]))
 		stxi(offset, _SP_REGNO, rn(iregs[regno]));
 	}
@@ -4231,7 +4234,7 @@ _epilog(jit_state_t *_jit, jit_node_t *node)
     if (_jitc->function->need_stack) {
 	offset = -gpr_save_area;
 	for (regno = 0; regno < jit_size(iregs);
-	     regno++, offset += sizeof(void*)) {
+	     regno++, offset += abi_slot_size) {
 	    if (jit_regset_tstbit(&_jitc->function->regset, iregs[regno]))
 		ldxi(rn(iregs[regno]), _SP_REGNO, offset);
 	}

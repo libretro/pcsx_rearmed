@@ -24,6 +24,7 @@
 #endif
 
 #define jit_arg_reg_p(i)		((i) >= 0 && (i) < 8)
+#  define W_DISP			0
 #if !_CALL_SYSV
 #  define jit_arg_f_reg_p(i)		((i) >= 0 && (i) < 13)
 #else
@@ -48,10 +49,10 @@
 #  define I_DISP			0
 #  define F_DISP			0
 #else
-#  define C_DISP			(__WORDSIZE >> 3) - sizeof(jit_int8_t)
-#  define S_DISP			(__WORDSIZE >> 3) - sizeof(jit_int16_t)
-#  define I_DISP			(__WORDSIZE >> 3) - sizeof(jit_int32_t)
-#  define F_DISP			(__WORDSIZE >> 3) - sizeof(jit_float32_t)
+#  define C_DISP			abi_slot_size - sizeof(jit_int8_t)
+#  define S_DISP			abi_slot_size - sizeof(jit_int16_t)
+#  define I_DISP			abi_slot_size - sizeof(jit_int32_t)
+#  define F_DISP			abi_slot_size - sizeof(jit_float32_t)
 #endif
 #define CVT_OFFSET			_jitc->function->cvt_offset
 #define CHECK_CVT_OFFSET()						\
@@ -500,7 +501,7 @@ _jit_arg(jit_state_t *_jit, jit_code_t code)
     else
 	offset = _jitc->function->self.size;
     if (incr)
-	_jitc->function->self.size += sizeof(jit_word_t);
+	_jitc->function->self.size += abi_slot_size;
     node = jit_new_node_ww(code, offset,
 			   ++_jitc->function->self.argn);
     jit_link_prolog();
@@ -532,7 +533,7 @@ _jit_arg_f(jit_state_t *_jit)
     }
 #endif
     if (incr)
-	_jitc->function->self.size += sizeof(jit_word_t);
+	_jitc->function->self.size += abi_slot_size;
     node = jit_new_node_ww(jit_code_arg_f, offset,
 			   ++_jitc->function->self.argn);
     jit_link_prolog();
@@ -690,7 +691,7 @@ _jit_putargr(jit_state_t *_jit, jit_int32_t u, jit_node_t *v, jit_code_t code)
 	jit_movr(JIT_RA0 - v->u.w, u);
     else {
 	jit_check_frame();
-	jit_stxi(v->u.w, JIT_FP, u);
+	jit_stxi(v->u.w + W_DISP, JIT_FP, u);
     }
     jit_dec_synth();
 }
@@ -707,7 +708,7 @@ _jit_putargi(jit_state_t *_jit, jit_word_t u, jit_node_t *v, jit_code_t code)
 	jit_check_frame();
 	regno = jit_get_reg(jit_class_gpr);
 	jit_movi(regno, u);
-	jit_stxi(v->u.w, JIT_FP, regno);
+	jit_stxi(v->u.w + W_DISP, JIT_FP, regno);
 	jit_unget_reg(regno);
     }
     jit_dec_synth();
@@ -820,9 +821,9 @@ _jit_pushargr(jit_state_t *_jit, jit_int32_t u, jit_code_t code)
 #endif
     }
     else
-	jit_stxi(_jitc->function->call.size + params_offset, JIT_SP, u);
+	jit_stxi(_jitc->function->call.size + params_offset + W_DISP, JIT_SP, u);
     if (incr)
-	_jitc->function->call.size += sizeof(jit_word_t);
+	_jitc->function->call.size += abi_slot_size;
     jit_dec_synth();
 }
 
@@ -844,11 +845,11 @@ _jit_pushargi(jit_state_t *_jit, jit_word_t u, jit_code_t code)
     else {
 	regno = jit_get_reg(jit_class_gpr);
 	jit_movi(regno, u);
-	jit_stxi(_jitc->function->call.size + params_offset, JIT_SP, regno);
+	jit_stxi(_jitc->function->call.size + params_offset + W_DISP, JIT_SP, regno);
 	jit_unget_reg(regno);
     }
     if (incr)
-	_jitc->function->call.size += sizeof(jit_word_t);
+	_jitc->function->call.size += abi_slot_size;
     jit_dec_synth();
 }
 
@@ -903,7 +904,7 @@ _jit_pushargr_f(jit_state_t *_jit, jit_int32_t u)
 	jit_stxi_f(_jitc->function->call.size + params_offset + F_DISP,
 		   JIT_SP, u);
     if (incr)
-	_jitc->function->call.size += sizeof(jit_word_t);
+	_jitc->function->call.size += abi_slot_size;
     jit_dec_synth();
 }
 
@@ -963,7 +964,7 @@ _jit_pushargi_f(jit_state_t *_jit, jit_float32_t u)
 	jit_unget_reg(regno);
     }
     if (incr)
-	_jitc->function->call.size += sizeof(jit_word_t);
+	_jitc->function->call.size += abi_slot_size;
     jit_dec_synth();
 }
 
@@ -1291,6 +1292,9 @@ _emit_code(jit_state_t *_jit)
     for (node = _jitc->head; node; node = node->next)
 	if (node->code != jit_code_label &&
 	    node->code != jit_code_note &&
+#ifdef __PS3__
+	    node->code != jit_code_live &&
+#endif
 	    node->code != jit_code_name)
 	    break;
     if (node && (node->code != jit_code_prolog ||
@@ -2306,7 +2310,10 @@ _emit_code(jit_state_t *_jit)
 void
 jit_flush(void *fptr, void *tptr)
 {
-#if defined(__GNUC__)
+#if defined(__PS3__)
+    extern void lightrec_code_inv(void *, uint32_t);
+    lightrec_code_inv(fptr, (uintptr_t)tptr - (uintptr_t)fptr);
+#elif defined(__GNUC__)
     jit_word_t		f, t, s;
 
     s = sysconf(_SC_PAGE_SIZE);
