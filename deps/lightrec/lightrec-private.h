@@ -201,6 +201,9 @@ struct lightrec_state {
 	u32 opt_flags;
 	_Bool with_32bit_lut;
 	_Bool mirrors_mapped;
+#if defined(__PS3__) && defined(__powerpc64__)
+	uintptr_t c_wrapper_descriptor[3];
+#endif
 	void *code_lut[];
 };
 

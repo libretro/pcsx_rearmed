@@ -1263,6 +1263,13 @@ static struct block * generate_dispatcher(struct lightrec_state *state)
 		goto err_free_jit;
 
 	state->c_wrapper = jit_address(c_wrapper);
+#if defined(__PS3__) && defined(__powerpc64__)
+	/* ELFv1 calls need a descriptor, not a code address. */
+	state->c_wrapper_descriptor[0] = (uintptr_t)state->c_wrapper;
+	state->c_wrapper_descriptor[1] = 0;
+	state->c_wrapper_descriptor[2] = 0;
+	state->c_wrapper = state->c_wrapper_descriptor;
+#endif
 
 	state->eob_wrapper_func = jit_address(addr2);
 	if (OPT_DETECT_IMPOSSIBLE_BRANCHES)
