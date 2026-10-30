@@ -1256,7 +1256,7 @@ u32 lightrec_handle_load_delay(struct lightrec_state *state,
 	union code c = lightrec_read_opcode(state, pc);
 	struct opcode op[2] = {
 		{
-			.c = c,
+			{ .c = c },
 			.flags = 0,
 		},
 		{

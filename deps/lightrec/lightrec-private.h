@@ -97,7 +97,9 @@
 /* Definition of jit_state_t (avoids inclusion of <lightning.h>) */
 struct jit_node;
 struct jit_state;
+#ifndef _lightning_h
 typedef struct jit_state jit_state_t;
+#endif
 
 struct blockcache;
 struct recompiler;

@@ -170,7 +170,10 @@ typedef int WRes;
 #define RINOK_WRes(x) { const WRes _result_ = (x); if (_result_ != 0) return _result_; }
 #endif
 
+#ifndef PS3_BYTE_TYPE_DEFINED
+#define PS3_BYTE_TYPE_DEFINED
 typedef unsigned char Byte;
+#endif
 typedef short Int16;
 typedef unsigned short UInt16;
 

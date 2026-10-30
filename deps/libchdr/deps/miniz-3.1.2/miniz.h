@@ -453,7 +453,10 @@ extern "C"
 /* Redefine zlib-compatible names to miniz equivalents, so miniz.c can be used as a drop-in replacement for the subset of zlib that miniz.c supports. */
 /* Define MINIZ_NO_ZLIB_COMPATIBLE_NAMES to disable zlib-compatibility if you use zlib in the same project. */
 #ifndef MINIZ_NO_ZLIB_COMPATIBLE_NAMES
+#ifndef PS3_BYTE_TYPE_DEFINED
+#define PS3_BYTE_TYPE_DEFINED
     typedef unsigned char Byte;
+#endif
     typedef unsigned int uInt;
     typedef mz_ulong uLong;
     typedef Byte Bytef;
