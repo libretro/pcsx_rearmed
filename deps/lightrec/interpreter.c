@@ -32,6 +32,9 @@ struct interpreter {
 	u32 cycles;
 	bool delay_slot;
 	bool load_delay;
+#ifdef __PS3__
+	bool dispatch_next;
+#endif
 	u16 offset;
 };
 
@@ -57,7 +60,17 @@ static inline u32 execute(lightrec_int_func_t func, struct interpreter *inter)
 
 static inline u32 lightrec_int_op(struct interpreter *inter)
 {
+#ifdef __PS3__
+	u32 pc;
+	/* ELFv1 indirect calls cannot tail-call across function descriptors. */
+	do {
+		inter->dispatch_next = false;
+		pc = execute(int_standard[inter->op->i.op], inter);
+	} while (inter->dispatch_next);
+	return pc;
+#else
 	return execute(int_standard[inter->op->i.op], inter);
+#endif
 }
 
 static inline u32 jump_skip(struct interpreter *inter)
@@ -70,7 +83,12 @@ static inline u32 jump_skip(struct interpreter *inter)
 		inter->cycles = 0;
 	}
 
+#ifdef __PS3__
+	inter->dispatch_next = true;
+	return 0;
+#else
 	return lightrec_int_op(inter);
+#endif
 }
 
 static inline u32 jump_next(struct interpreter *inter)
