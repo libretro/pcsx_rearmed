@@ -1633,6 +1633,12 @@ int lightrec_compile_block(struct lightrec_cstate *cstate,
 		lightrec_reaper_pause(state->reaper);
 
 	block->function = new_fn;
+#if defined(__PS3__) && PS3_LIGHTREC_LOG && defined(PS3_LIGHTREC_DIAGNOSTICS)
+	{
+		extern void lightrec_ps3_log_block(u32, unsigned int);
+		lightrec_ps3_log_block(block->pc, block->code_size);
+	}
+#endif
 	block_clear_flags(block, BLOCK_SHOULD_RECOMPILE);
 
 	/* Add compiled function to the LUT */
