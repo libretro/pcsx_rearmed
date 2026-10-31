@@ -41,7 +41,7 @@
  * Ensures fseeko/ftello are declared under strict C99/C11 and
  * that 64-bit file offsets are used on 32-bit platforms (armhf,
  * i386, and other time64/LFS rebuilds). */
-#if !defined(_WIN32) && !defined(__PS3__) && !defined(__SWITCH__) && !defined(__vita__)
+#if !defined(_WIN32) && !defined(__SWITCH__) && !defined(__vita__)
 #  ifndef _POSIX_C_SOURCE
 #    define _POSIX_C_SOURCE 200809L
 #  endif
@@ -2933,7 +2933,7 @@ static uint64_t core_stdio_fsize(void *file) {
 #elif defined(__WIN32__) || defined(_WIN32) || defined(WIN32) || defined(__WIN64__)
 	#define core_stdio_fseek_impl _fseeki64
 	#define core_stdio_ftell_impl _ftelli64
-#elif defined(__PS3__) && !defined(__PSL1GHT__) || defined(__SWITCH__) || defined(__vita__)
+#elif defined(__SWITCH__) || defined(__vita__)
 	#define core_stdio_fseek_impl(x,y,z) fseek(x,(off_t)y,z)
 	#define core_stdio_ftell_impl(x) (off_t)ftell(x)
 #else

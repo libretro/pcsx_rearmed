@@ -97,7 +97,9 @@
 /* Definition of jit_state_t (avoids inclusion of <lightning.h>) */
 struct jit_node;
 struct jit_state;
+#ifndef _lightning_h
 typedef struct jit_state jit_state_t;
+#endif
 
 struct blockcache;
 struct recompiler;
@@ -199,6 +201,9 @@ struct lightrec_state {
 	u32 opt_flags;
 	_Bool with_32bit_lut;
 	_Bool mirrors_mapped;
+#if defined(__PS3__) && defined(__powerpc64__)
+	uintptr_t c_wrapper_descriptor[3];
+#endif
 	void *code_lut[];
 };
 

@@ -54,6 +54,7 @@ else ifeq ($(platform), osx)
 	LDFLAGS  += $(TARGET_RULE)
    endif
 else ifeq ($(platform), psl1ght)
+	BUILTIN_GPU ?= rsx
   ifeq ($(strip $(PS3DEV)),)
   $(error "PS3DEV env var is not set")
   endif
@@ -303,11 +304,18 @@ else ifeq ($(platform), arm64)
 # Lightweight PS3 Homebrew SDK
 else ifeq ($(platform), psl1ght)
 	TARGET := $(TARGET_NAME)_libretro_psl1ght.a
-	CFLAGS += -DBLARGG_BIG_ENDIAN=1 -D__ppc__
+	PSL1GHT ?= $(PS3DEV)
+	PS3_LIGHTREC_LOG ?= 0
+	PS3_LIGHTREC_SELFTEST ?= 0
+	CFLAGS += -DBLARGG_BIG_ENDIAN=1 -D__ppc__ -D__PS3__ -D__PSL1GHT__
+	CFLAGS += -I$(PSL1GHT)/ppu/include
+	CFLAGS += -DPS3_LIGHTREC_LOG=$(PS3_LIGHTREC_LOG)
+	CFLAGS += -DPS3_LIGHTREC_SELFTEST=$(PS3_LIGHTREC_SELFTEST)
 	CFLAGS += -DNO_DYLIB
 	NO_UNDEF_CHECK := 1
 	STATIC_LINKING := 1
 	NO_MMAP := 1
+	NO_POSIX_MEMALIGN := 1
 	LIBPTHREAD :=
 	LIBDL :=
 	NEED_SYSCONF := 1
@@ -316,6 +324,17 @@ else ifeq ($(platform), psl1ght)
 	USE_ASYNC_GPU = 0
 	USE_ASYNC_SPU = 0
 	USE_LIBRETRO_VFS = 0
+	LIGHTREC_CODE_INV := 1
+	ifeq ($(DYNAREC),lightrec)
+		OBJS += libpcsxcore/lightrec/ps3.o libpcsxcore/lightrec/ps3_init.o libpcsxcore/lightrec/ps3_code.o
+		ifeq ($(PS3_LIGHTREC_SELFTEST),1)
+			OBJS += libpcsxcore/lightrec/ps3_test.o
+libpcsxcore/lightrec/ps3_test.o: CFLAGS += -DPS3_LIGHTREC_CORE
+		endif
+		ifeq ($(PS3_LIGHTREC_LOG),1)
+			OBJS += libpcsxcore/lightrec/ps3_log.o
+		endif
+	endif
 
 # PSP
 else ifeq ($(platform), psp1)
@@ -696,6 +715,9 @@ $(info MAIN_LDLIBS: $(MAIN_LDLIBS))
 $(info )
 
 include Makefile
+
+libpcsxcore/lightrec/ps3_code.o: libpcsxcore/lightrec/ps3_code.S
+	$(CC) -c $< -o $@
 
 # no special AS needed for gpu_neon
 plugins/gpu_neon/psx_gpu/psx_gpu_arm_neon.o: plugins/gpu_neon/psx_gpu/psx_gpu_arm_neon.S

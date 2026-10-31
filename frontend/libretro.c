@@ -50,6 +50,12 @@
 #include "revision.h"
 
 #include <libretro.h>
+#ifdef GPU_RSX
+#include "../plugins/gpu_rsx/rsx.h"
+#endif
+#if defined(__PSL1GHT__) && defined(LIGHTREC)
+#include "../libpcsxcore/lightrec/ps3.h"
+#endif
 #include "libretro_core_options.h"
 
 #ifdef USE_LIBRETRO_VFS
@@ -427,6 +433,17 @@ static void vout_flip(const void *vram_, int vram_ofs, int bgr24,
    int w_blit = min(w, vout_width);
    int port = 0, hwrapped;
    int sstride = 2048;
+
+#ifdef GPU_RSX
+   if (gpu_rsx_active())
+   {
+      if (!(in_enable_crosshair[0] + in_enable_crosshair[1]) &&
+          gpu_rsx_output(vram_, vram_ofs, bgr24, x, y, w, h, vout_width, vout_height))
+         goto out;
+      gpu_rsx_prepare_vram(0, 0, 1024, 512);
+      gpu_rsx_suspend_output();
+   }
+#endif
 
    if (vram == NULL || dims_changed || (in_enable_crosshair[0] + in_enable_crosshair[1]) > 0)
    {
@@ -2019,6 +2036,13 @@ bool retro_load_game(const struct retro_game_info *info)
    is_exe = (strcasestr(info->path, ".exe") != NULL);
 
    update_variables(false);
+#ifdef GPU_RSX
+   {
+      struct retro_variable renderer = { "pcsx_rearmed_ps3_renderer", NULL };
+      environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &renderer);
+      gpu_rsx_negotiate(environ_cb, !renderer.value || strcmp(renderer.value, "software"));
+   }
+#endif
 
    if (plugins_opened)
    {
@@ -3564,6 +3588,9 @@ void retro_run(void)
       update_variables(true);
 
    psxRegs.stop = 0;
+#ifdef GPU_RSX
+   gpu_rsx_begin_frame();
+#endif
    psxCpu->Execute(&psxRegs);
 
    if (pl_rearmed_cbs.fskip_dirty) {
@@ -3578,6 +3605,9 @@ void retro_run(void)
       pl_rearmed_cbs.fskip_dirty = 0;
    }
 
+#ifdef GPU_RSX
+   if (!gpu_rsx_present(video_cb))
+#endif
    video_cb((vout_fb_dirty || !vout_can_dupe) ? vout_buf_ptr : NULL,
        vout_width, vout_height, vout_pitch_b);
    vout_fb_dirty = 0;
@@ -3914,6 +3944,10 @@ void retro_init(void)
    struct retro_rumble_interface rumble;
    int ret;
 
+#if defined(__PSL1GHT__) && defined(LIGHTREC) && PS3_LIGHTREC_LOG
+   lightrec_ps3_executable_path = NULL;
+   environ_cb(RETRO_ENVIRONMENT_GET_LIBRETRO_PATH, &lightrec_ps3_executable_path);
+#endif
    log_mem_usage(0);
 
    msg_interface_version = 0;

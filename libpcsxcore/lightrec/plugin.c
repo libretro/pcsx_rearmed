@@ -2,7 +2,9 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <unistd.h>
+#ifndef __PS3__
 #include <signal.h>
+#endif
 #include <assert.h>
 
 #if P_HAVE_MMAP
@@ -27,6 +29,13 @@
 
 #include "mem.h"
 #include "plugin.h"
+
+#ifdef __PS3__
+#include "ps3.h"
+#if PS3_LIGHTREC_LOG && defined(PS3_LIGHTREC_DIAGNOSTICS)
+extern void lightrec_ps3_log_execution(u32, int);
+#endif
+#endif
 
 #if (defined(__arm__) || defined(__aarch64__)) && !defined(ALLOW_LIGHTREC_ON_ARM)
 #error "Lightrec should not be used on ARM (please specify DYNAREC=ari64 to make)"
@@ -389,6 +398,10 @@ struct lightrec_ops lightrec_ops = {
 
 static int lightrec_plugin_init(void)
 {
+#ifdef __PS3__
+	if (lightrec_ps3_init())
+		return -EINVAL;
+#endif
 	lightrec_map[PSX_MAP_KERNEL_USER_RAM].address = psxRegs.ptrs.psxM;
 	lightrec_map[PSX_MAP_BIOS].address = psxRegs.ptrs.psxR;
 	lightrec_map[PSX_MAP_SCRATCH_PAD].address = psxRegs.ptrs.psxH;
@@ -402,6 +415,8 @@ static int lightrec_plugin_init(void)
 				   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 		if (code_buffer == MAP_FAILED)
 			return -ENOMEM;
+#elif defined(__PS3__)
+		code_buffer = lightrec_ps3_code;
 #else
 		code_buffer = malloc(CODE_BUFFER_SIZE);
 		if (!code_buffer)
@@ -432,6 +447,13 @@ static int lightrec_plugin_init(void)
 	lightrec_state = lightrec_init(LIGHTREC_PROG_NAME,
 			lightrec_map, ARRAY_SIZE(lightrec_map),
 			&lightrec_ops);
+	if (!lightrec_state)
+	{
+#ifdef __PS3__
+		lightrec_ps3_free_code();
+#endif
+		return -ENOMEM;
+	}
 
 	// fprintf(stderr, "M=0x%lx, P=0x%lx, R=0x%lx, H=0x%lx\n",
 	// 		(uintptr_t) psxRegs.ptrs.psxM,
@@ -439,7 +461,7 @@ static int lightrec_plugin_init(void)
 	// 		(uintptr_t) psxRegs.ptrs.psxR,
 	// 		(uintptr_t) psxRegs.ptrs.psxH);
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__PS3__)
 	signal(SIGPIPE, exit);
 #endif
 	lightrec_plugin_apply_config();
@@ -577,8 +599,14 @@ static void lightrec_plugin_execute_internal(bool block_only)
 							      psxRegs.pc,
 							      cycles_lightrec);
 		} else {
+#if defined(__PS3__) && PS3_LIGHTREC_LOG && defined(PS3_LIGHTREC_DIAGNOSTICS)
+			lightrec_ps3_log_execution(psxRegs.pc, 0);
+#endif
 			psxRegs.pc = lightrec_execute(lightrec_state,
 						      psxRegs.pc, cycles_lightrec);
+#if defined(__PS3__) && PS3_LIGHTREC_LOG && defined(PS3_LIGHTREC_DIAGNOSTICS)
+			lightrec_ps3_log_execution(psxRegs.pc, 1);
+#endif
 		}
 
 		lightrec_transition_to_pcsx(lightrec_state);
@@ -701,7 +729,11 @@ static void lightrec_plugin_shutdown(void)
 #if P_HAVE_MMAP
 		munmap(code_buffer, CODE_BUFFER_SIZE);
 #else
+#ifdef __PS3__
+		lightrec_ps3_free_code();
+#else
 		free(code_buffer);
+#endif
 #endif
 	}
 }
