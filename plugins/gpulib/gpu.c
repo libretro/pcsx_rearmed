@@ -492,6 +492,15 @@ const unsigned char cmd_lengths[256] =
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
+static inline uint16_t gpu_pixel_mask(uint16_t pixel)
+{
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+  return -(uint16_t)!!(pixel & HTOLE16(0x8000));
+#else
+  return (int16_t)pixel >> 15;
+#endif
+}
+
 // this isn't very useful so should be rare
 void cpy_mask(uint16_t *dst, const uint16_t *src, int l, uint32_t r6)
 {
@@ -503,7 +512,7 @@ void cpy_mask(uint16_t *dst, const uint16_t *src, int l, uint32_t r6)
   else {
     uint16_t msb = HTOLE16(r6 << 15);
     for (i = 0; i < l; i++) {
-      uint16_t mask = -(uint16_t)!!(dst[i] & HTOLE16(0x8000));
+      uint16_t mask = gpu_pixel_mask(dst[i]);
       dst[i] = (dst[i] & mask) | ((src[i] | msb) & ~mask);
     }
   }
