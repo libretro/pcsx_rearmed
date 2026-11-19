@@ -549,6 +549,57 @@ static void SpriteMaybeAsm(le16_t *pPixel, u32 count, const u8 *pTxt_base,
 }
 #endif // __arm__
 
+#ifdef HAVE_ARMV6
+// No mask bit set in the destination: the mask check would skip nothing.
+static inline bool MaskClear(const le16_t *p_, u32 count)
+{
+	const u16 *p = (const u16 *)p_;
+	u32 acc = 0;
+	if (!count)
+		return true;
+	if ((uintptr_t)p & 2) {
+		acc = *p++;
+		count--;
+	}
+	const u32 *w = (const u32 *)p;
+	for (; count >= 8; count -= 8, w += 4) {
+		acc |= w[0] | w[1] | w[2] | w[3];
+		if (acc & 0x80008000)
+			return false;
+	}
+	for (; count >= 2; count -= 2)
+		acc |= *w++;
+	if (count)
+		acc |= *(const u16 *)w;
+	return !(acc & 0x80008000);
+}
+
+// as PolyHasAsm
+static constexpr bool SpriteHasAsm(int cf)
+{
+	return cf == 0x20 || cf == 0x40 || cf == 0x60;
+}
+
+// A sprite writes each pixel once, so when none is masked the variant
+// without the mask check draws the same.
+template<int CF>
+static void SpriteMaskMaybeAsm(le16_t *pPixel, u32 count, const u8 *pTxt_base,
+        const gpu_unai_inner_t &inn)
+{
+	if (SpriteHasAsm(CF & ~4)) {
+		s32 l, lines = inn.y1 - inn.y0;
+		for (l = 0; l < lines; l++)
+			if (!MaskClear(pPixel + l * FRAME_WIDTH, count))
+				break;
+		if (l >= lines) {
+			SpriteMaybeAsm<CF & ~4>(pPixel, count, pTxt_base, inn);
+			return;
+		}
+	}
+	gpuSpriteDriverFn<CF>(pPixel, count, pTxt_base, inn);
+}
+#endif
+
 static void SpriteNULL(le16_t *pPixel, u32 count, const u8 *pTxt_base,
 	const gpu_unai_inner_t &inn)
 {
@@ -572,26 +623,28 @@ static void SpriteNULL(le16_t *pPixel, u32 count, const u8 *pTxt_base,
 #endif
 #ifdef HAVE_ARMV6
 #define TA6(cf) SpriteMaybeAsm<(cf)>
+#define TM6(cf) SpriteMaskMaybeAsm<(cf)>
 #else
 #define TA6(cf) TI(cf)
+#define TM6(cf) TI(cf)
 #endif
 #define TIBLOCK(ub) \
 	TN,            TN,            TN,            TN,            TN,            TN,            TN,            TN,            \
 	TN,            TN,            TN,            TN,            TN,            TN,            TN,            TN,            \
 	TN,            TN,            TN,            TN,            TN,            TN,            TN,            TN,            \
 	TN,            TN,            TN,            TN,            TN,            TN,            TN,            TN,            \
-	TA((ub)|0x20), TA6((ub)|0x21),TA6((ub)|0x22),TA6((ub)|0x23),TI((ub)|0x24), TI((ub)|0x25), TI((ub)|0x26), TI((ub)|0x27), \
-	TN,            TN,            TI((ub)|0x2a), TA6((ub)|0x2b),TN,            TN,            TI((ub)|0x2e), TI((ub)|0x2f), \
-	TN,            TN,            TI((ub)|0x32), TI((ub)|0x33), TN,            TN,            TI((ub)|0x36), TI((ub)|0x37), \
-	TN,            TN,            TI((ub)|0x3a), TI((ub)|0x3b), TN,            TN,            TI((ub)|0x3e), TI((ub)|0x3f), \
-	TA((ub)|0x40), TA6((ub)|0x41),TA6((ub)|0x42),TA6((ub)|0x43),TI((ub)|0x44), TI((ub)|0x45), TI((ub)|0x46), TI((ub)|0x47), \
-	TN,            TN,            TI((ub)|0x4a), TA6((ub)|0x4b),TN,            TN,            TI((ub)|0x4e), TI((ub)|0x4f), \
-	TN,            TN,            TI((ub)|0x52), TI((ub)|0x53), TN,            TN,            TI((ub)|0x56), TI((ub)|0x57), \
-	TN,            TN,            TI((ub)|0x5a), TI((ub)|0x5b), TN,            TN,            TI((ub)|0x5e), TI((ub)|0x5f), \
-	TA((ub)|0x60), TI((ub)|0x61), TI((ub)|0x62), TI((ub)|0x63), TI((ub)|0x64), TI((ub)|0x65), TI((ub)|0x66), TI((ub)|0x67), \
-	TN,            TN,            TI((ub)|0x6a), TI((ub)|0x6b), TN,            TN,            TI((ub)|0x6e), TI((ub)|0x6f), \
-	TN,            TN,            TI((ub)|0x72), TI((ub)|0x73), TN,            TN,            TI((ub)|0x76), TI((ub)|0x77), \
-	TN,            TN,            TI((ub)|0x7a), TI((ub)|0x7b), TN,            TN,            TI((ub)|0x7e), TI((ub)|0x7f)
+	TA((ub)|0x20), TA6((ub)|0x21),TA6((ub)|0x22),TA6((ub)|0x23),TM6((ub)|0x24), TM6((ub)|0x25), TM6((ub)|0x26), TM6((ub)|0x27), \
+	TN,            TN,            TI((ub)|0x2a), TA6((ub)|0x2b),TN,            TN,            TM6((ub)|0x2e), TM6((ub)|0x2f), \
+	TN,            TN,            TI((ub)|0x32), TI((ub)|0x33), TN,            TN,            TM6((ub)|0x36), TM6((ub)|0x37), \
+	TN,            TN,            TI((ub)|0x3a), TI((ub)|0x3b), TN,            TN,            TM6((ub)|0x3e), TM6((ub)|0x3f), \
+	TA((ub)|0x40), TA6((ub)|0x41),TA6((ub)|0x42),TA6((ub)|0x43),TM6((ub)|0x44), TM6((ub)|0x45), TM6((ub)|0x46), TM6((ub)|0x47), \
+	TN,            TN,            TI((ub)|0x4a), TA6((ub)|0x4b),TN,            TN,            TM6((ub)|0x4e), TM6((ub)|0x4f), \
+	TN,            TN,            TI((ub)|0x52), TI((ub)|0x53), TN,            TN,            TM6((ub)|0x56), TM6((ub)|0x57), \
+	TN,            TN,            TI((ub)|0x5a), TI((ub)|0x5b), TN,            TN,            TM6((ub)|0x5e), TM6((ub)|0x5f), \
+	TA((ub)|0x60), TI((ub)|0x61), TI((ub)|0x62), TI((ub)|0x63), TM6((ub)|0x64), TM6((ub)|0x65), TM6((ub)|0x66), TM6((ub)|0x67), \
+	TN,            TN,            TI((ub)|0x6a), TI((ub)|0x6b), TN,            TN,            TM6((ub)|0x6e), TM6((ub)|0x6f), \
+	TN,            TN,            TI((ub)|0x72), TI((ub)|0x73), TN,            TN,            TM6((ub)|0x76), TM6((ub)|0x77), \
+	TN,            TN,            TI((ub)|0x7a), TI((ub)|0x7b), TN,            TN,            TM6((ub)|0x7e), TM6((ub)|0x7f)
 
 const PS gpuSpriteDrivers[256] = {
 	TIBLOCK(0<<8), TIBLOCK(1<<8)
@@ -602,6 +655,7 @@ const PS gpuSpriteDrivers[256] = {
 #undef TIBLOCK
 #undef TA
 #undef TA6
+#undef TM6
 
 // this tries to avoid pointer shifting
 #define DITHER_LKUP(lut, dst) \
@@ -847,6 +901,26 @@ static void PolySpanMaybeAsm(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count
 }
 #endif
 
+#ifdef HAVE_ARMV6
+// Unlit, unblended texture copies, where the asm draws exactly what the C
+// does. Lit and blended asm rounds a little differently.
+static constexpr bool PolyHasAsm(int cf)
+{
+	return cf == 0x020 || cf == 0x040;
+}
+
+// A span writes each pixel once, so when none of its pixels is masked the
+// variant without the mask check draws the same and can use the asm.
+template<int CF>
+static void PolySpanMaskMaybeAsm(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count, s32 y)
+{
+	if (PolyHasAsm(CF & ~4) && MaskClear(pDst, count))
+		PolySpanMaybeAsm<CF & ~4>(gpu_unai, pDst, count, y);
+	else
+		gpuPolySpanFn<CF>(gpu_unai, pDst, count, y);
+}
+#endif
+
 static void PolyNULL(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count, s32 y)
 {
 	#ifdef ENABLE_GPU_LOG_SUPPORT
@@ -868,42 +942,44 @@ typedef void (*PP)(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count, s32 y);
 #endif
 #ifdef HAVE_ARMV6
 #define TA6(cf) PolySpanMaybeAsm<(cf)>
+#define TM6(cf) PolySpanMaskMaybeAsm<(cf)>
 #else
 #define TA6(cf) TI(cf)
+#define TM6(cf) TI(cf)
 #endif
 #define TIBLOCK(ub) \
-	TI((ub)|0x00), TI((ub)|0x01), TA6((ub)|0x02),TI((ub)|0x03), TI((ub)|0x04), TI((ub)|0x05), TI((ub)|0x06), TI((ub)|0x07), \
-	TN,            TN,            TA((ub)|0x0a), TI((ub)|0x0b), TN,            TN,            TI((ub)|0x0e), TI((ub)|0x0f), \
-	TN,            TN,            TA6((ub)|0x12),TI((ub)|0x13), TN,            TN,            TI((ub)|0x16), TI((ub)|0x17), \
-	TN,            TN,            TA((ub)|0x1a), TI((ub)|0x1b), TN,            TN,            TI((ub)|0x1e), TI((ub)|0x1f), \
-	TA((ub)|0x20), TA6((ub)|0x21),TA6((ub)|0x22),TA6((ub)|0x23),TI((ub)|0x24), TI((ub)|0x25), TI((ub)|0x26), TI((ub)|0x27), \
-	TN,            TN,            TI((ub)|0x2a), TI((ub)|0x2b), TN,            TN,            TI((ub)|0x2e), TI((ub)|0x2f), \
-	TN,            TN,            TI((ub)|0x32), TI((ub)|0x33), TN,            TN,            TI((ub)|0x36), TI((ub)|0x37), \
-	TN,            TN,            TI((ub)|0x3a), TI((ub)|0x3b), TN,            TN,            TI((ub)|0x3e), TI((ub)|0x3f), \
-	TA((ub)|0x40), TA6((ub)|0x41),TA6((ub)|0x42),TA6((ub)|0x43),TI((ub)|0x44), TI((ub)|0x45), TI((ub)|0x46), TI((ub)|0x47), \
-	TN,            TN,            TI((ub)|0x4a), TI((ub)|0x4b), TN,            TN,            TI((ub)|0x4e), TI((ub)|0x4f), \
-	TN,            TN,            TI((ub)|0x52), TI((ub)|0x53), TN,            TN,            TI((ub)|0x56), TI((ub)|0x57), \
-	TN,            TN,            TI((ub)|0x5a), TI((ub)|0x5b), TN,            TN,            TI((ub)|0x5e), TI((ub)|0x5f), \
-	TI((ub)|0x60), TI((ub)|0x61), TI((ub)|0x62), TI((ub)|0x63), TI((ub)|0x64), TI((ub)|0x65), TI((ub)|0x66), TI((ub)|0x67), \
-	TN,            TN,            TI((ub)|0x6a), TI((ub)|0x6b), TN,            TN,            TI((ub)|0x6e), TI((ub)|0x6f), \
-	TN,            TN,            TI((ub)|0x72), TI((ub)|0x73), TN,            TN,            TI((ub)|0x76), TI((ub)|0x77), \
-	TN,            TN,            TI((ub)|0x7a), TI((ub)|0x7b), TN,            TN,            TI((ub)|0x7e), TI((ub)|0x7f), \
-	TN,            TA6((ub)|0x81),TN,            TI((ub)|0x83), TN,            TI((ub)|0x85), TN,            TI((ub)|0x87), \
-	TN,            TN,            TN,            TI((ub)|0x8b), TN,            TN,            TN,            TI((ub)|0x8f), \
-	TN,            TN,            TN,            TI((ub)|0x93), TN,            TN,            TN,            TI((ub)|0x97), \
-	TN,            TN,            TN,            TI((ub)|0x9b), TN,            TN,            TN,            TI((ub)|0x9f), \
-	TN,            TA6((ub)|0xa1),TN,            TI((ub)|0xa3), TN,            TI((ub)|0xa5), TN,            TI((ub)|0xa7), \
-	TN,            TN,            TN,            TA6((ub)|0xab),TN,            TN,            TN,            TI((ub)|0xaf), \
-	TN,            TN,            TN,            TI((ub)|0xb3), TN,            TN,            TN,            TI((ub)|0xb7), \
-	TN,            TN,            TN,            TI((ub)|0xbb), TN,            TN,            TN,            TI((ub)|0xbf), \
-	TN,            TI((ub)|0xc1), TN,            TI((ub)|0xc3), TN,            TI((ub)|0xc5), TN,            TI((ub)|0xc7), \
-	TN,            TN,            TN,            TI((ub)|0xcb), TN,            TN,            TN,            TI((ub)|0xcf), \
-	TN,            TN,            TN,            TI((ub)|0xd3), TN,            TN,            TN,            TI((ub)|0xd7), \
-	TN,            TN,            TN,            TI((ub)|0xdb), TN,            TN,            TN,            TI((ub)|0xdf), \
-	TN,            TI((ub)|0xe1), TN,            TI((ub)|0xe3), TN,            TI((ub)|0xe5), TN,            TI((ub)|0xe7), \
-	TN,            TN,            TN,            TI((ub)|0xeb), TN,            TN,            TN,            TI((ub)|0xef), \
-	TN,            TN,            TN,            TI((ub)|0xf3), TN,            TN,            TN,            TI((ub)|0xf7), \
-	TN,            TN,            TN,            TI((ub)|0xfb), TN,            TN,            TN,            TI((ub)|0xff)
+	TI((ub)|0x00), TI((ub)|0x01), TA6((ub)|0x02),TI((ub)|0x03), TM6((ub)|0x04), TM6((ub)|0x05), TM6((ub)|0x06),TM6((ub)|0x07), \
+	TN,            TN,            TA((ub)|0x0a), TI((ub)|0x0b), TN,            TN,            TM6((ub)|0x0e), TM6((ub)|0x0f), \
+	TN,            TN,            TA6((ub)|0x12),TI((ub)|0x13), TN,            TN,            TM6((ub)|0x16), TM6((ub)|0x17), \
+	TN,            TN,            TA((ub)|0x1a), TI((ub)|0x1b), TN,            TN,            TM6((ub)|0x1e), TM6((ub)|0x1f), \
+	TA((ub)|0x20), TA6((ub)|0x21),TA6((ub)|0x22),TA6((ub)|0x23),TM6((ub)|0x24), TM6((ub)|0x25), TM6((ub)|0x26), TM6((ub)|0x27), \
+	TN,            TN,            TI((ub)|0x2a), TI((ub)|0x2b), TN,            TN,            TM6((ub)|0x2e), TM6((ub)|0x2f), \
+	TN,            TN,            TI((ub)|0x32), TI((ub)|0x33), TN,            TN,            TM6((ub)|0x36), TM6((ub)|0x37), \
+	TN,            TN,            TI((ub)|0x3a), TI((ub)|0x3b), TN,            TN,            TM6((ub)|0x3e), TM6((ub)|0x3f), \
+	TA((ub)|0x40), TA6((ub)|0x41),TA6((ub)|0x42),TA6((ub)|0x43),TM6((ub)|0x44), TM6((ub)|0x45), TM6((ub)|0x46), TM6((ub)|0x47), \
+	TN,            TN,            TI((ub)|0x4a), TI((ub)|0x4b), TN,            TN,            TM6((ub)|0x4e), TM6((ub)|0x4f), \
+	TN,            TN,            TI((ub)|0x52), TI((ub)|0x53), TN,            TN,            TM6((ub)|0x56), TM6((ub)|0x57), \
+	TN,            TN,            TI((ub)|0x5a), TI((ub)|0x5b), TN,            TN,            TM6((ub)|0x5e), TM6((ub)|0x5f), \
+	TI((ub)|0x60), TI((ub)|0x61), TI((ub)|0x62), TI((ub)|0x63), TM6((ub)|0x64), TM6((ub)|0x65), TM6((ub)|0x66), TM6((ub)|0x67), \
+	TN,            TN,            TI((ub)|0x6a), TI((ub)|0x6b), TN,            TN,            TM6((ub)|0x6e), TM6((ub)|0x6f), \
+	TN,            TN,            TI((ub)|0x72), TI((ub)|0x73), TN,            TN,            TM6((ub)|0x76), TM6((ub)|0x77), \
+	TN,            TN,            TI((ub)|0x7a), TI((ub)|0x7b), TN,            TN,            TM6((ub)|0x7e), TM6((ub)|0x7f), \
+	TN,            TA6((ub)|0x81),TN,            TI((ub)|0x83), TN,            TM6((ub)|0x85), TN,            TM6((ub)|0x87), \
+	TN,            TN,            TN,            TI((ub)|0x8b), TN,            TN,            TN,            TM6((ub)|0x8f), \
+	TN,            TN,            TN,            TI((ub)|0x93), TN,            TN,            TN,            TM6((ub)|0x97), \
+	TN,            TN,            TN,            TI((ub)|0x9b), TN,            TN,            TN,            TM6((ub)|0x9f), \
+	TN,            TA6((ub)|0xa1),TN,            TI((ub)|0xa3), TN,            TM6((ub)|0xa5), TN,            TM6((ub)|0xa7), \
+	TN,            TN,            TN,            TA6((ub)|0xab),TN,            TN,            TN,            TM6((ub)|0xaf), \
+	TN,            TN,            TN,            TI((ub)|0xb3), TN,            TN,            TN,            TM6((ub)|0xb7), \
+	TN,            TN,            TN,            TI((ub)|0xbb), TN,            TN,            TN,            TM6((ub)|0xbf), \
+	TN,            TI((ub)|0xc1), TN,            TI((ub)|0xc3), TN,            TM6((ub)|0xc5), TN,            TM6((ub)|0xc7), \
+	TN,            TN,            TN,            TI((ub)|0xcb), TN,            TN,            TN,            TM6((ub)|0xcf), \
+	TN,            TN,            TN,            TI((ub)|0xd3), TN,            TN,            TN,            TM6((ub)|0xd7), \
+	TN,            TN,            TN,            TI((ub)|0xdb), TN,            TN,            TN,            TM6((ub)|0xdf), \
+	TN,            TI((ub)|0xe1), TN,            TI((ub)|0xe3), TN,            TM6((ub)|0xe5), TN,            TM6((ub)|0xe7), \
+	TN,            TN,            TN,            TI((ub)|0xeb), TN,            TN,            TN,            TM6((ub)|0xef), \
+	TN,            TN,            TN,            TI((ub)|0xf3), TN,            TN,            TN,            TM6((ub)|0xf7), \
+	TN,            TN,            TN,            TI((ub)|0xfb), TN,            TN,            TN,            TM6((ub)|0xff)
 
 const PP gpuPolySpanDrivers[1024] = {
 	TIBLOCK(0<<8), TIBLOCK(1<<8), TIBLOCK(2<<8), TIBLOCK(3<<8)
@@ -914,5 +990,6 @@ const PP gpuPolySpanDrivers[1024] = {
 #undef TIBLOCK
 #undef TA
 #undef TA6
+#undef TM6
 
 #endif /* __GPU_UNAI_GPU_INNER_H__ */
