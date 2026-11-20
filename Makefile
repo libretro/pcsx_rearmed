@@ -346,6 +346,16 @@ libpcsxcore/cdriso.o: CFLAGS += -Wno-unused-function
 CFLAGS += -DHAVE_CHD -I$(LCHDR)/include
 endif
 
+# PCSX ReCompressed reader
+ifeq ($(HAVE_PSXRC),1)
+PSXRC_ROOT ?= ../converter
+PSXRC_LIB ?= $(PSXRC_ROOT)/build/libpsxrc_reader.a
+PSXRC_LDLIBS ?= -lavcodec -lavutil -lzstd -lopus
+CFLAGS += -DHAVE_PSXRC -I$(PSXRC_ROOT)/include
+PSXRC_INPUT = $(PSXRC_LIB)
+MAIN_LDLIBS += $(PSXRC_LDLIBS)
+endif
+
 # zlib/miniz
 ifeq ($(USE_MINIZ),1)
 MINIZ_DIR = deps/libchdr/deps/miniz-3.1.2
@@ -525,7 +535,7 @@ include/revision.h: FORCE
 
 target_: $(TARGET)
 
-$(TARGET): $(OBJS)
+$(TARGET): $(OBJS) $(PSXRC_INPUT)
 ifeq ($(PARTIAL_LINKING), 1)
 	$(LD) -o $(basename $(TARGET))1.o -r --gc-sections $(addprefix -u ,$(shell cat frontend/libretro-extern)) $(addprefix -u ,$(EXTRA_EXTERN_SYMS)) $^
 	$(OBJCOPY) --keep-global-symbols=frontend/libretro-extern $(addprefix -G ,$(EXTRA_EXTERN_SYMS)) $(basename $(TARGET))1.o $(basename $(TARGET)).o

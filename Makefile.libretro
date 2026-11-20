@@ -116,6 +116,9 @@ DUMMY := $(shell git config --global --add safe.directory /builds/libretro/pcsx_
 endif
 
 TARGET_NAME := pcsx_rearmed
+ifeq ($(HAVE_PSXRC),1)
+TARGET_NAME := pcsx_recompressed
+endif
 ARCH_DETECTED := $(shell $(firstword $(CC)) -dumpmachine $(CFLAGS) | awk -F- '{print $$1}')
 GIT_VERSION := " $(shell git rev-parse --short HEAD || echo unknown)"
 ifneq ($(GIT_VERSION)," unknown")

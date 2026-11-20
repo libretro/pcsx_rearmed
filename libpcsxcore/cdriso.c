@@ -31,6 +31,9 @@
 #ifdef HAVE_CHD
 #include <libchdr/chd.h>
 #endif
+#ifdef HAVE_PSXRC
+#include <psxrc.h>
+#endif
 
 #ifdef _WIN32
 #define strcasecmp _stricmp
@@ -59,6 +62,9 @@ unsigned int cdrIsoMultidiskSelect;
 
 static FILE *cdHandle = NULL;
 static FILE *subHandle = NULL;
+#ifdef HAVE_PSXRC
+static psxrc *psxrc_img;
+#endif
 
 static boolean subChanMixed = FALSE;
 static boolean subChanRaw = FALSE;
@@ -1499,6 +1505,64 @@ static void PrintTracks(void) {
 
 // This function is invoked by the front-end when opening an ISO
 // file for playback
+#ifdef HAVE_PSXRC
+static int psxrc_io(void *context, uint64_t offset, void *dest, size_t size)
+{
+	FILE *file = context;
+	return fseeko(file, offset, SEEK_SET) == 0 && fread(dest, 1, size, file) == size;
+}
+
+static int cdread_psxrc(FILE *file, unsigned int base, void *dest, int sector)
+{
+	(void)file;
+	if (sector < 0 || !psxrc_read_sector(psxrc_img, base + sector, dest ? dest : cdbuffer))
+		return -1;
+	return CD_FRAMESIZE_RAW;
+}
+
+static int cdread_sub_psxrc(FILE *file, int sector, void *dest)
+{
+	(void)file;
+	return sector >= 0 && psxrc_read_subchannel(psxrc_img, sector, dest) ? 0 : -1;
+}
+
+static int handlepsxrc(const char *fname, off_t size)
+{
+	psxrc_img = size > 0 ? psxrc_open(psxrc_io, cdHandle, size) : NULL;
+	if (!psxrc_img) {
+		SysPrintf("Invalid or unsupported PSXRC image: %s\n", fname);
+		ISOclose();
+		return -1;
+	}
+	numtracks = psxrc_track_count(psxrc_img);
+	memset(ti, 0, sizeof(ti));
+	for (int i = 1; i <= numtracks; ++i) {
+		const psxrc_track *track = psxrc_get_track(psxrc_img, i);
+		ti[i].type = track->mode == PSXRC_CDDA ? CDRT_CDDA : CDRT_DATA;
+		ti[i].start = track->index1 + 150;
+		ti[i].start_offset = track->index1;
+		ti[i].length = track->end - track->index1;
+	}
+	cdimg_read_func = cdread_psxrc;
+	if (psxrc_has_subchannel(psxrc_img))
+		cdimg_read_sub_func = cdread_sub_psxrc;
+	size_t sbi_bytes;
+	const uint8_t *sbi = psxrc_sbi_bitmap(psxrc_img, &sbi_bytes);
+	if (sbi) {
+		sbi_sectors = malloc(sbi_bytes);
+		if (sbi_sectors == NULL) {
+			ISOclose();
+			return -1;
+		}
+		memcpy(sbi_sectors, sbi, sbi_bytes);
+		sbi_len = sbi_bytes;
+	}
+	SysPrintf("Loaded PSXRC image: %s\n", fname);
+	PrintTracks();
+	return 0;
+}
+#endif
+
 int ISOopen(const char *fname)
 {
 	boolean isMode1ISO = FALSE;
@@ -1532,6 +1596,12 @@ int ISOopen(const char *fname)
 	ISOgetBuffer = ISOgetBuffer_normal;
 	cdimg_read_func = cdread_normal;
 	cdimg_read_sub_func = NULL;
+
+#ifdef HAVE_PSXRC
+	const char *extension = strrchr(fname, '.');
+	if (extension && !strcasecmp(extension, ".psxrc"))
+		return handlepsxrc(fname, size_main);
+#endif
 
 	if (parsetoc(fname) == 0) {
 		strcat(image_str, "[+toc]");
@@ -1639,6 +1709,10 @@ int ISOclose(void)
 {
 	int i;
 
+#ifdef HAVE_PSXRC
+	psxrc_close(psxrc_img);
+	psxrc_img = NULL;
+#endif
 	if (cdHandle != NULL) {
 		fclose(cdHandle);
 		cdHandle = NULL;
@@ -1760,6 +1834,11 @@ int ISOreadTrack(const unsigned char *time, void *buf)
 	if (!cdHandle && !chd_img)
 		return -1;
 
+#ifdef HAVE_PSXRC
+	if (psxrc_img)
+		return cdread_psxrc(cdHandle, 0, buf, sector - 150) < 0 ? -1 : 0;
+#endif
+
 	if (sector >= ti[1].start + ti[1].length &&
 	    numtracks > 1 && ti[2].type == CDRT_CDDA) {
 		return ISOreadCDDA(time, buf);
@@ -1778,6 +1857,11 @@ int ISOreadTrack(const unsigned char *time, void *buf)
 int ISOreadSub(const unsigned char *time, void *buffer)
 {
 	int ret, sector = msf2sec(time);
+
+#ifdef HAVE_PSXRC
+	if (psxrc_img)
+		return cdread_sub_psxrc(cdHandle, sector - 150, buffer);
+#endif
 
 	if (sector >= ti[1].start + ti[1].length) {
 		// for tracks 2+ use the fake data, otherwise
@@ -1813,6 +1897,10 @@ int ISOgetStatus(struct CdrStat *stat)
 	stat->Type = ti[1].type;
 	stat->nodisk = cdHandle == NULL;
 	stat->mode1 = cdimg_read_func == cdread_2048;
+#ifdef HAVE_PSXRC
+	if (psxrc_img)
+		stat->mode1 = psxrc_get_track(psxrc_img, 1)->mode == PSXRC_COOKED_MODE1;
+#endif
 	
 	return 0;
 }

@@ -20,6 +20,7 @@ obj/
 
 pcsx
 pcsx_rearmed_libretro.dll
+pcsx_recompressed_libretro.dll
 pcsxr_spu_area3.out
 psx_gpu_offsets_update
 /frontend/320240/pollux_set
@@ -34,5 +35,6 @@ psx_gpu_offsets_update
 /a/
 /tests/*.exe
 /tests/*.exe.*
+/tests/__pycache__/
 /tests/testcd.cue
 /tests/testcd.bin
