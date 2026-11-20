@@ -26,6 +26,7 @@ extern "C" {
 #endif
 
 struct CdrStat;
+struct xa_decode;
 
 int ISOinit(void);
 int ISOshutdown(void);
@@ -37,6 +38,16 @@ int ISOreadTrack(const unsigned char *time, void *buf);
 int ISOreadCDDA(const unsigned char *time, void *buffer);
 int ISOreadSub(const unsigned char *time, void *buffer);
 int ISOgetStatus(struct CdrStat *stat);
+#ifdef HAVE_PSXRC
+#include <psxrc.h>
+void ISOsetDirectAudio(int enabled);
+void ISOsetDirectVideo(int enabled);
+int ISOvideoHint(uint32_t lba, psxrc_video_hint *hint);
+int ISOcopyVideo(uint32_t lba, const psxrc_video_hint *hint, uint8_t *pixels, size_t capacity);
+/* Returns 1 for an XA template, 0 for a full sector, or -1 on read error. */
+int ISOreadTrackDeferred(const unsigned char *time, void *buf);
+int ISOreadDirectXA(const unsigned char *time, unsigned coding, struct xa_decode *xa);
+#endif
 
 extern void * (*ISOgetBuffer)(void);
 

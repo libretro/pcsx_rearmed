@@ -2,7 +2,9 @@
 *.a
 *.swp
 *.so
+*.dylib
 *.d
+__pycache__/
 tags
 cscope.out
 compile_commands.json
@@ -13,19 +15,36 @@ config.mak
 config.log
 cheatpops.db
 /include/revision.h
-/tools
+/tools/mkm2cd
+/tools/mkm2cd.exe
+/tools/psxcimg
+/tools/psxcimg.exe
 obj/
+/libs/
+/jni/libs/
 .vscode/
 .vscode/ipch/*
 
 pcsx
 pcsx_rearmed_libretro.dll
 pcsx_recompressed_libretro.dll
+/pcsx_*_libretro_emscripten.bc
+/a.out
+/a.out.js
+/a.out.wasm
 pcsxr_spu_area3.out
 psx_gpu_offsets_update
 /frontend/320240/pollux_set
 
 /out/
+/build/
+/.tooling/
+/testroms/
+/fixture/
+/android-libs/
+*.psxrc
+*.srm
+*.mcr
 /pcsx_bin/
 /.pcsx/
 /screenshots/
@@ -35,6 +54,5 @@ psx_gpu_offsets_update
 /a/
 /tests/*.exe
 /tests/*.exe.*
-/tests/__pycache__/
 /tests/testcd.cue
 /tests/testcd.bin

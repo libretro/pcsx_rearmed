@@ -1,5 +1,12 @@
-PCSX-ReARMed - yet another PCSX fork
-====================================
+# PCSX ReCompressed
+
+PCSX ReCompressed is a fork of the PCSX ReARMed libretro core with support
+for `.psxrc` PlayStation disc images. The format combines lossless disc
+compression with optional H.264 and Opus compression for supported video and
+audio. See the [PCSX ReCompressed documentation](PSXRC.md) for build
+instructions, the separate converter, and playback options.
+
+## Upstream PCSX ReARMed
 
 ![CI (Linux)](https://github.com/notaz/pcsx_rearmed/workflows/CI%20(Linux)/badge.svg)
 

@@ -181,6 +181,36 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       },
       "shared",
    },
+#ifdef HAVE_PSXRC
+   {
+      "pcsx_rearmed_psxrc_direct_h264",
+      "PSXRC Direct H.264 Video (Restart)",
+      NULL,
+      "Experimental. Use decoded H.264 pixels for matching PlayStation MDEC transfers in PSXRC movies. Ambiguous or unsupported transfers use the normal STR decoder.",
+      NULL,
+      "system",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+   {
+      "pcsx_rearmed_psxrc_direct_audio",
+      "PSXRC Direct XA Audio (Restart)",
+      NULL,
+      "Play Opus-compressed XA audio from PSXRC images through the emulated CD audio mixer. Raw disc reads still return reconstructed XA sectors.",
+      NULL,
+      "system",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+#endif
 #if defined(HAVE_CDROM) || defined(USE_ASYNC_CDROM)
 #define V(x) { #x, NULL }
    {

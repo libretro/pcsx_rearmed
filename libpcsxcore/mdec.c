@@ -19,6 +19,57 @@
  ***************************************************************************/
 
 #include "mdec.h"
+#ifdef HAVE_PSXRC
+#include <inttypes.h>
+#include <stdio.h>
+#include "cdrom-async.h"
+
+int mdecTraceEnabled;
+int mdecDirectVideoEnabled;
+static unsigned trace_dma;
+
+static uint64_t trace_hash_word(uint64_t hash, unsigned word)
+{
+	hash = (hash ^ (word & 255)) * UINT64_C(1099511628211);
+	return (hash ^ (word >> 8)) * UINT64_C(1099511628211);
+}
+
+static unsigned mdec_payload_words(const u16 *words, unsigned count)
+{
+	/* Guest VLC implementations commonly pad the DMA with zero or EOB words.
+	 * Retain the final EOB of the last block in the fingerprint. */
+	unsigned payload = count;
+	while (payload && SWAP16(words[payload - 1]) == 0)
+		--payload;
+	while (payload > 1 && SWAP16(words[payload - 1]) == 0xfe00 &&
+	        SWAP16(words[payload - 2]) == 0xfe00)
+		--payload;
+	return payload;
+}
+
+static void trace_mdec_input(const u16 *words, unsigned count, u32 address, int rgb15)
+{
+	unsigned payload = mdec_payload_words(words, count);
+	uint64_t hash = UINT64_C(14695981039346656037), coefficients = hash;
+	unsigned quant_min = 63, quant_max = 0;
+	int dc = 1;
+	for (unsigned i = 0; i < payload; ++i) {
+		unsigned value = SWAP16(words[i]);
+		hash = trace_hash_word(hash, value);
+		coefficients = trace_hash_word(coefficients, dc ? value & 1023 : value);
+		if (dc) {
+			unsigned quant = value >> 10;
+			if (quant < quant_min)
+				quant_min = quant;
+			if (quant > quant_max)
+				quant_max = quant;
+		}
+		dc = !dc && value == 0xfe00;
+	}
+	fprintf(stderr, "PSXRC_DMA0 id=%u cycle=%u addr=%08x mode=%u words=%u dma_words=%u quant_min=%u quant_max=%u hash=%016" PRIx64 " coefficients=%016" PRIx64 "\n",
+		++trace_dma, psxRegs.cycle, address, rgb15 ? 15 : 24, payload, count, quant_min, quant_max, hash, coefficients);
+}
+#endif
 
 /* memory speed is 1 byte per MDEC_BIAS psx clock
  * That mean (PSXCLK / MDEC_BIAS) B/s
@@ -453,7 +504,256 @@ static void yuv2rgb24(int *blk, u8 *image) {
 	}
 }
 
+#ifdef HAVE_PSXRC
+enum { VIDEO_TRANSFER_WINDOW = 64 };
+
+typedef struct {
+	psxrc_video_hint hint;
+	u32 lba, transfer;
+} video_transfer;
+
+static struct {
+	video_transfer recent[VIDEO_TRANSFER_WINDOW];
+	u32 transfer, slot;
+	psxrc_video_hint frame;
+	u8 *pixels;
+	u16 *rle;
+	size_t pixel_capacity, rle_capacity;
+	u32 lba, command;
+	unsigned block, remaining, consumed;
+	int reported;
+} direct_video;
+
+static void mdec_invalidate_video(void)
+{
+	memset(direct_video.recent, 0, sizeof(direct_video.recent));
+	direct_video.slot = direct_video.transfer = direct_video.remaining = 0;
+}
+
+void mdecSetDirectVideo(int enabled)
+{
+	if (!mdecDirectVideoEnabled && !enabled)
+		return;
+	mdec_invalidate_video();
+	mdecDirectVideoEnabled = enabled;
+	direct_video.reported = 0;
+	if (!enabled) {
+		free(direct_video.pixels);
+		free(direct_video.rle);
+		direct_video.pixels = NULL;
+		direct_video.rle = NULL;
+		direct_video.pixel_capacity = direct_video.rle_capacity = 0;
+	}
+}
+
+void mdecObserveVideo(u32 lba, unsigned chunk)
+{
+	++direct_video.transfer;
+	if (chunk)
+		return;
+	psxrc_video_hint hint;
+	if (!cdra_videoHint(lba, &hint))
+		return;
+	for (unsigned i = 0; i < VIDEO_TRANSFER_WINDOW; ++i) {
+		video_transfer *item = &direct_video.recent[i];
+		if (item->hint.words && item->lba == lba) {
+			item->transfer = direct_video.transfer;
+			return;
+		}
+	}
+	direct_video.recent[direct_video.slot++ % VIDEO_TRANSFER_WINDOW] =
+		(video_transfer){ hint, lba, direct_video.transfer };
+}
+
+static const u16 *mdec_video_block_end(const u16 *p, const u16 *end)
+{
+	for (unsigned block = 0; block < 6; ++block) {
+		if (p == end)
+			return NULL;
+		++p; /* DC coefficient */
+		unsigned position = 0;
+		for (;;) {
+			if (p == end)
+				return NULL;
+			unsigned word = SWAP16(*p++);
+			if (word == MDEC_END_OF_DATA)
+				break;
+			position += (word >> 10) + 1;
+			if (position >= 64)
+				return NULL;
+		}
+	}
+	return p;
+}
+
+static int mdec_uses_video_quant_matrix(void)
+{
+	const u8 *matrix = psxrc_mdec_quant_matrix();
+	for (unsigned i = 0; i < 64; ++i) {
+		unsigned index = zscan[i];
+		int expected = matrix[index] * SCALER(aanscales[index], AAN_PRESCALE_SCALE);
+		if (iq_y[i] != expected || iq_uv[i] != expected)
+			return 0;
+	}
+	return 1;
+}
+
+static void mdec_direct_fallback(const char *reason)
+{
+	if (mdecTraceEnabled)
+		fprintf(stderr, "PSXRC_VIDEO_FALLBACK id=%u reason=%s\n", trace_dma, reason);
+}
+
+static void mdec_match_video(unsigned count)
+{
+	direct_video.remaining = 0;
+	if (!mdecDirectVideoEnabled || Config.Mdec || mdec.block_buffer_pos || count > 131072)
+		return;
+	unsigned words = mdec_payload_words(mdec.rl, count);
+	unsigned candidates = 0;
+	for (unsigned i = 0; i < VIDEO_TRANSFER_WINDOW; ++i) {
+		const video_transfer *item = &direct_video.recent[i];
+		candidates += item->hint.words == words && words &&
+			direct_video.transfer - item->transfer < VIDEO_TRANSFER_WINDOW;
+	}
+	if (!candidates)
+		return;
+
+	uint64_t hash = UINT64_C(14695981039346656037);
+	for (unsigned i = 0; i < words; ++i)
+		hash = trace_hash_word(hash, SWAP16(mdec.rl[i]));
+	const video_transfer *match = NULL;
+	for (unsigned i = 0; i < VIDEO_TRANSFER_WINDOW; ++i) {
+		const video_transfer *item = &direct_video.recent[i];
+		if (item->hint.words != words || item->hint.hash != hash ||
+		    direct_video.transfer - item->transfer >= VIDEO_TRANSFER_WINDOW)
+			continue;
+		if (match) {
+			mdec_direct_fallback("ambiguous");
+			return;
+		}
+		match = item;
+	}
+	if (!match)
+		return;
+	if (!mdec_uses_video_quant_matrix()) {
+		mdec_direct_fallback("quantization");
+		return;
+	}
+
+	unsigned blocks = ((match->hint.width + 15) / 16) * ((match->hint.height + 15) / 16);
+	const u16 *p = mdec.rl, *end = mdec.rl + words;
+	for (unsigned i = 0; i < blocks && p; ++i)
+		p = mdec_video_block_end(p, end);
+	if (p != end) {
+		mdec_direct_fallback("shape");
+		return;
+	}
+
+	size_t pixels = (size_t)match->hint.width * match->hint.height * 3 / 2;
+	size_t rle_bytes = (size_t)words * sizeof(*p);
+	if (pixels > direct_video.pixel_capacity) {
+		u8 *buffer = realloc(direct_video.pixels, pixels);
+		if (!buffer)
+			return;
+		direct_video.pixels = buffer;
+		direct_video.pixel_capacity = pixels;
+	}
+	if (rle_bytes > direct_video.rle_capacity) {
+		u16 *buffer = realloc(direct_video.rle, rle_bytes);
+		if (!buffer)
+			return;
+		direct_video.rle = buffer;
+		direct_video.rle_capacity = rle_bytes;
+	}
+	if (!cdra_copyVideo(match->lba, &match->hint, direct_video.pixels, direct_video.pixel_capacity)) {
+		mdec_direct_fallback("frame");
+		return;
+	}
+	memcpy(direct_video.rle, mdec.rl, rle_bytes);
+	direct_video.frame = match->hint;
+	direct_video.lba = match->lba;
+	direct_video.command = mdec.reg0;
+	direct_video.block = direct_video.consumed = 0;
+	direct_video.remaining = blocks;
+}
+
+static int mdec_direct_block(u8 *output, int rgb15)
+{
+	if (!direct_video.remaining)
+		return 0;
+	const u16 *start = direct_video.rle + direct_video.consumed;
+	const u16 *end = mdec_video_block_end(start, direct_video.rle + direct_video.frame.words);
+	if (!end || mdec.reg0 != direct_video.command || Config.Mdec ||
+	    end - start > mdec.rl_end - mdec.rl ||
+	    memcmp(mdec.rl, start, (size_t)(end - start) * sizeof(*start))) {
+		direct_video.remaining = 0;
+		mdec_direct_fallback("changed");
+		return 0;
+	}
+
+	unsigned width = direct_video.frame.width, height = direct_video.frame.height;
+	unsigned column_height = (height + 15) / 16;
+	unsigned left = direct_video.block / column_height * 16;
+	unsigned top = direct_video.block % column_height * 16;
+	const u8 *y_plane = direct_video.pixels;
+	const u8 *cb_plane = y_plane + (size_t)width * height;
+	const u8 *cr_plane = cb_plane + (size_t)width * height / 4;
+	int stp = (mdec.reg0 & MDEC0_STP) ? 0x8000 : 0;
+	for (unsigned row = 0; row < 16; ++row) {
+		unsigned y = top + row < height ? top + row : height - 1;
+		for (unsigned col = 0; col < 16; ++col) {
+			unsigned x = left + col < width ? left + col : width - 1;
+			unsigned chroma = (y / 2) * (width / 2) + x / 2;
+			int luma = ((int)y_plane[y * width + x] - 128) * 1024;
+			int cb = (int)cb_plane[chroma] - 128, cr = (int)cr_plane[chroma] - 128;
+			int r = luma + MULR(cr), g = luma + MULG2(cb, cr), b = luma + MULB(cb);
+			if (rgb15) {
+				u16 color = MAKERGB15(clamp5(SCALER(r, 13)), clamp5(SCALER(g, 13)),
+					clamp5(SCALER(b, 13)), stp);
+				memcpy(output, &color, sizeof(color));
+				output += sizeof(color);
+			} else {
+				*output++ = clamp8(SCALER(r, 10));
+				*output++ = clamp8(SCALER(g, 10));
+				*output++ = clamp8(SCALER(b, 10));
+			}
+		}
+	}
+	if (!direct_video.block && mdecTraceEnabled)
+		fprintf(stderr, "PSXRC_VIDEO_DIRECT id=%u lba=%u mode=%u\n", trace_dma, direct_video.lba, rgb15 ? 15 : 24);
+	if (!direct_video.reported) {
+		SysPrintf("PSXRC: playing H.264 video directly through MDEC\n");
+		direct_video.reported = 1;
+	}
+	mdec.rl += end - start;
+	direct_video.consumed += end - start;
+	++direct_video.block;
+	--direct_video.remaining;
+	return 1;
+}
+#endif
+
+static void mdec_output_block(int *blk, u8 *image, int rgb15)
+{
+#ifdef HAVE_PSXRC
+	if (mdec_direct_block(image, rgb15))
+		return;
+#endif
+	mdec.rl = rl2blk(blk, mdec.rl);
+	if (rgb15)
+		yuv2rgb15(blk, (u16 *)image);
+	else
+		yuv2rgb24(blk, image);
+}
+
 void mdecInit(void) {
+#ifdef HAVE_PSXRC
+	mdec_invalidate_video();
+	const char *trace = getenv("PSXRC_TRACE_MDEC");
+	mdecTraceEnabled = trace && !strcmp(trace, "1");
+	trace_dma = 0;
+#endif
 	memset(&mdec, 0, sizeof(mdec));
 	memset(iq_y, 0, sizeof(iq_y));
 	memset(iq_uv, 0, sizeof(iq_uv));
@@ -472,6 +772,9 @@ u32 mdecRead0(void) {
 // status register
 void mdecWrite1(u32 data) {
 	if (data & MDEC1_RESET) { // mdec reset
+#ifdef HAVE_PSXRC
+		mdec_invalidate_video();
+#endif
 		mdec.reg0 = 0;
 		mdec.reg1 = 0;
 		mdec.pending_dma1.adr = 0;
@@ -518,6 +821,11 @@ void psxDma0(u32 adr, u32 bcr, u32 chcr) {
 			/* sanity check */
 			if(mdec.rl_end <= mdec.rl)
 				break;
+#ifdef HAVE_PSXRC
+			if (mdecTraceEnabled)
+				trace_mdec_input(mdec.rl, size * 2u, adr, !!(cmd & MDEC0_RGB24));
+			mdec_match_video(size * 2u);
+#endif
 
 			/* process the pending dma1 */
 			if(mdec.pending_dma1.adr){
@@ -529,6 +837,9 @@ void psxDma0(u32 adr, u32 bcr, u32 chcr) {
 
 		case 0x4: // quantization table upload
 			{
+#ifdef HAVE_PSXRC
+				direct_video.remaining = 0;
+#endif
 				const u8 *p = mem;
 				// printf("uploading new quantization table\n");
 				// printmatrixu8(p);
@@ -593,6 +904,10 @@ void psxDma1(u32 adr, u32 bcr, u32 chcr) {
 		HW_DMA1_CHCR &= SWAP32(~0x01000000);
 		return;
 	}
+#ifdef HAVE_PSXRC
+	if (mdecTraceEnabled)
+		fprintf(stderr, "PSXRC_DMA1 id=%u cycle=%u addr=%08x bytes=%d\n", trace_dma, psxRegs.cycle, adr, size);
+#endif
 
 	if (mdec.reg0 & MDEC0_RGB24) {
 		/* 16 bits decoding
@@ -610,15 +925,13 @@ void psxDma1(u32 adr, u32 bcr, u32 chcr) {
 		}
 
 		while(size >= SIZE_OF_16B_BLOCK) {
-			mdec.rl = rl2blk(blk, mdec.rl);
-			yuv2rgb15(blk, (u16 *)image);
+			mdec_output_block(blk, image, 1);
 			image += SIZE_OF_16B_BLOCK;
 			size -= SIZE_OF_16B_BLOCK;
 		}
 
 		if(size != 0) {
-			mdec.rl = rl2blk(blk, mdec.rl);
-			yuv2rgb15(blk, (u16 *)mdec.block_buffer);
+			mdec_output_block(blk, mdec.block_buffer, 1);
 			memcpy(image, mdec.block_buffer, size);
 			mdec.block_buffer_pos = mdec.block_buffer + size;
 		}
@@ -639,15 +952,13 @@ void psxDma1(u32 adr, u32 bcr, u32 chcr) {
 		}
 
 		while(size >= SIZE_OF_24B_BLOCK) {
-			mdec.rl = rl2blk(blk, mdec.rl);
-			yuv2rgb24(blk, image);
+			mdec_output_block(blk, image, 0);
 			image += SIZE_OF_24B_BLOCK;
 			size -= SIZE_OF_24B_BLOCK;
 		}
 
 		if(size != 0) {
-			mdec.rl = rl2blk(blk, mdec.rl);
-			yuv2rgb24(blk, mdec.block_buffer);
+			mdec_output_block(blk, mdec.block_buffer, 0);
 			memcpy(image, mdec.block_buffer, size);
 			mdec.block_buffer_pos = mdec.block_buffer + size;
 		}
@@ -705,6 +1016,10 @@ void mdec1Interrupt() {
 }
 
 int mdecFreeze(void *f, int Mode) {
+#ifdef HAVE_PSXRC
+	if (Mode == 0)
+		mdec_invalidate_video();
+#endif
 	u8 *base = (u8 *)psxRegs.ptrs.psxM;
 	u32 v;
 

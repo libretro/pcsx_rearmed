@@ -259,12 +259,27 @@ SOURCES_C += \
 COREFLAGS += -DHAVE_RTHREADS
 endif
 
+ifeq ($(HAVE_PSXRC),1)
+PSXRC_ROOT ?= $(ROOT_DIR)/../converter
+ifeq ($(strip $(PSXRC_ANDROID_DEPS)),)
+  $(error Set PSXRC_ANDROID_DEPS to the directory containing the Android codec prefixes)
+endif
+PSXRC_ABI_DEPS := $(PSXRC_ANDROID_DEPS)/$(TARGET_ARCH_ABI)
+SOURCES_C += $(addprefix $(PSXRC_ROOT)/src/,audio.c bs.c codec.c filters.c reader.c str.c xa.c)
+EXTRA_INCLUDES += $(PSXRC_ROOT)/include $(PSXRC_ABI_DEPS)/include $(PSXRC_ABI_DEPS)/include/opus
+COREFLAGS += -DHAVE_PSXRC
+PSXRC_ANDROID_LIBS := $(addprefix $(PSXRC_ABI_DEPS)/lib/,libavcodec.a libavutil.a libopus.a)
+endif
+
 GIT_VERSION := " $(shell git rev-parse --short HEAD || echo unknown)"
 ifneq ($(GIT_VERSION)," unknown")
   COREFLAGS += -DGIT_VERSION=\"$(GIT_VERSION)\"
 endif
 
 LOCAL_MODULE        := retro
+ifeq ($(HAVE_PSXRC),1)
+LOCAL_MODULE        := pcsx_recompressed_libretro
+endif
 LOCAL_SRC_FILES     := $(SOURCES_C) $(SOURCES_ASM)
 LOCAL_CFLAGS        := $(COREFLAGS)
 LOCAL_C_INCLUDES    := $(ROOT_DIR)/include
@@ -275,6 +290,9 @@ LOCAL_LDFLAGS       += -Wl,--script=$(FRONTEND_DIR)/libretro-extern.T
 LOCAL_LDFLAGS       += -Wl,--gc-sections
 LOCAL_LDFLAGS       += -Wl,-z,max-page-size=16384
 LOCAL_LDLIBS        := -lz -llog
+ifeq ($(HAVE_PSXRC),1)
+LOCAL_LDLIBS        += $(PSXRC_ANDROID_LIBS) -lm
+endif
 LOCAL_ARM_MODE      := arm
 
 ifeq ($(TARGET_ARCH_ABI),armeabi-v7a)

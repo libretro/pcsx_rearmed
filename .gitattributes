@@ -1,0 +1,2 @@
+/jni/build-psxrc-deps.sh text eol=lf
+/tools/build-psxrc-cross.sh text eol=lf

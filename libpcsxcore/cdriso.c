@@ -33,6 +33,7 @@
 #endif
 #ifdef HAVE_PSXRC
 #include <psxrc.h>
+#include "mdec.h"
 #endif
 
 #ifdef _WIN32
@@ -64,6 +65,8 @@ static FILE *cdHandle = NULL;
 static FILE *subHandle = NULL;
 #ifdef HAVE_PSXRC
 static psxrc *psxrc_img;
+static int psxrc_direct_audio_requested, psxrc_direct_audio;
+static int psxrc_direct_video_requested;
 #endif
 
 static boolean subChanMixed = FALSE;
@@ -1534,6 +1537,11 @@ static int handlepsxrc(const char *fname, off_t size)
 		ISOclose();
 		return -1;
 	}
+	psxrc_direct_audio = psxrc_direct_audio_requested;
+	if (psxrc_direct_video_requested && psxrc_video_sector_count(psxrc_img)) {
+		psxrc_enable_direct_video(psxrc_img);
+		mdecSetDirectVideo(1);
+	}
 	numtracks = psxrc_track_count(psxrc_img);
 	memset(ti, 0, sizeof(ti));
 	for (int i = 1; i <= numtracks; ++i) {
@@ -1710,6 +1718,7 @@ int ISOclose(void)
 	int i;
 
 #ifdef HAVE_PSXRC
+	mdecSetDirectVideo(0);
 	psxrc_close(psxrc_img);
 	psxrc_img = NULL;
 #endif
@@ -1826,6 +1835,64 @@ static void DecodeRawSubData(unsigned char *subbuffer) {
 // read track
 // time: byte 0 - minute; byte 1 - second; byte 2 - frame (non-bcd)
 // buf: if NULL, data is kept in internal buffer accessible by ISOgetBuffer()
+#ifdef HAVE_PSXRC
+void ISOsetDirectAudio(int enabled)
+{
+	psxrc_direct_audio_requested = enabled;
+}
+
+void ISOsetDirectVideo(int enabled)
+{
+	psxrc_direct_video_requested = enabled;
+}
+
+int ISOvideoHint(uint32_t lba, psxrc_video_hint *hint)
+{
+	return psxrc_img && psxrc_read_video_hint(psxrc_img, lba, hint);
+}
+
+int ISOcopyVideo(uint32_t lba, const psxrc_video_hint *hint, uint8_t *pixels, size_t capacity)
+{
+	return psxrc_img && psxrc_copy_video(psxrc_img, lba, hint, pixels, capacity);
+}
+
+int ISOreadTrackDeferred(const unsigned char *time, void *buf)
+{
+	unsigned int lba = msf2sec(time) - 150;
+	if (psxrc_img && psxrc_direct_audio &&
+	    psxrc_read_xa_template(psxrc_img, lba, buf ? buf : cdbuffer))
+		return 1;
+	return ISOreadTrack(time, buf);
+}
+
+int ISOreadDirectXA(const unsigned char *time, unsigned coding, xa_decode_t *xa)
+{
+	unsigned int lba = msf2sec(time) - 150;
+	unsigned frames, channels = (coding & 1) + 1;
+	if (!psxrc_img || !psxrc_direct_audio)
+		return 0;
+	frames = psxrc_read_xa_pcm(psxrc_img, lba, coding, xa->pcm,
+			sizeof(xa->pcm) / sizeof(xa->pcm[0]));
+	if (!frames)
+		return 0;
+	if (psxrc_direct_audio == 1) {
+		SysPrintf("PSXRC: playing Opus XA audio directly\n");
+		psxrc_direct_audio = 2;
+	}
+	xa->freq = coding & 4 ? 18900 : 37800;
+	xa->nbits = 4;
+	xa->stereo = channels == 2;
+	xa->nsamples = frames;
+	xa->left.y0 = xa->pcm[(frames - 1) * channels];
+	xa->left.y1 = xa->pcm[(frames - 2) * channels];
+	if (xa->stereo) {
+		xa->right.y0 = xa->pcm[(frames - 1) * channels + 1];
+		xa->right.y1 = xa->pcm[(frames - 2) * channels + 1];
+	}
+	return 1;
+}
+#endif
+
 int ISOreadTrack(const unsigned char *time, void *buf)
 {
 	int sector = msf2sec(time);

@@ -41,6 +41,9 @@ def main():
     parser.add_argument("--dll-directory", type=Path, action="append", default=[])
     parser.add_argument("--bios", choices=("Auto", "HLE"), default="Auto")
     parser.add_argument("--frames", type=int, default=1650)
+    parser.add_argument("--direct-xa", action="store_true", help="Enable and require direct Opus XA playback")
+    parser.add_argument("--direct-h264", action="store_true", help="Enable and require direct H.264 video output")
+    parser.add_argument("--readahead", type=int, choices=(0, 12), default=12)
     parser.add_argument("--tap", type=parse_tap, action="append", default=[])
     parser.add_argument("--capture-dir", type=Path)
     args = parser.parse_args()
@@ -48,13 +51,31 @@ def main():
     try:
         frames = []
         rasters = []
+        messages = []
+        audio_stats = []
         for label, core, image in (("source", args.stock, args.source), ("psxrc", args.fork, args.psxrc)):
             capture = None
             if args.capture_dir:
                 args.capture_dir.mkdir(exist_ok=True)
                 capture = args.capture_dir / f"{label}.png"
-            frames.append(playback(core.resolve(), image.resolve(), args.frames, 12, args.system.resolve(),
-                                   args.bios, capture, args.tap, reload_state=True, snapshot=rasters))
+            audio_stats.append({"frames": 0, "audible_batches": 0})
+            frames.append(playback(core.resolve(), image.resolve(), args.frames, args.readahead,
+                                   args.system.resolve(), args.bios, capture, args.tap, reload_state=True,
+                                   snapshot=rasters, direct_xa=args.direct_xa and label == "psxrc",
+                                   log_messages=messages if (args.direct_xa or args.direct_h264) and label == "psxrc" else None,
+                                   audio_stats=audio_stats[-1] if args.direct_xa else None,
+                                   direct_h264=args.direct_h264 and label == "psxrc"))
+        if args.direct_h264:
+            if b"PSXRC: playing H.264 video directly through MDEC\n" not in messages:
+                raise SystemExit("No direct H.264 output was observed")
+            print("Direct H.264 video output observed.")
+        if args.direct_xa:
+            if b"PSXRC: playing Opus XA audio directly\n" not in messages:
+                raise SystemExit("No direct XA playback was observed")
+            if min(stats["audible_batches"] for stats in audio_stats) == 0:
+                raise SystemExit("One of the XA runs produced silent audio")
+            print(f"Direct XA playback observed. Audio frames delivered: "
+                  f"{audio_stats[0]['frames']} source, {audio_stats[1]['frames']} PSXRC.")
         shared = len(frames[0] & frames[1])
         delta = raster_difference(*rasters)
         print(f"Ran {args.frames} frames and saved and reloaded each game. "

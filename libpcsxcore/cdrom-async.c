@@ -50,6 +50,7 @@ static int  rcdrom_isMediaInserted(void *stream) { return 0; }
 
 struct cached_buf {
    u32 lba_wflag;                 // bit31: set if cdda
+   int deferred;
    u8 buf[CD_FRAMESIZE_RAW];
    u8 buf_sub[SUB_FRAMESIZE];
 };
@@ -67,12 +68,24 @@ static struct {
    alignas(64) u8 buf_local[CD_FRAMESIZE_RAW_ALIGNED];
 } acdrom;
 
+static int read_track(const unsigned char *time, void *buf, int *deferred)
+{
+#ifdef HAVE_PSXRC
+   if (deferred) {
+      int ret = ISOreadTrackDeferred(time, buf);
+      *deferred = ret > 0;
+      return ret < 0 ? ret : 0;
+   }
+#endif
+   return ISOreadTrack(time, buf);
+}
+
 static void lbacache_do(u32 lba, u32 cdda_bit)
 {
    alignas(64) unsigned char buf[CD_FRAMESIZE_RAW_ALIGNED];
    unsigned char msf[3], buf_sub[SUB_FRAMESIZE];
    u32 i = lba % acdrom.buf_cnt;
-   int ret;
+   int ret, deferred = 0;
 
    lba2msf(lba + 150, &msf[0], &msf[1], &msf[2]);
    slock_lock(acdrom.read_lock);
@@ -81,7 +94,7 @@ static void lbacache_do(u32 lba, u32 cdda_bit)
    else if (cdda_bit)
       ret = ISOreadCDDA(msf, buf);
    else
-      ret = ISOreadTrack(msf, buf);
+      ret = read_track(msf, buf, &deferred);
    if (acdrom.have_subchannel) {
       if (g_cd_handle)
          ret |= rcdrom_readSub(g_cd_handle, lba, buf_sub);
@@ -105,6 +118,7 @@ static void lbacache_do(u32 lba, u32 cdda_bit)
 
    if ((lba | cdda_bit) != acdrom.buf_cache[i].lba_wflag) {
       acdrom.buf_cache[i].lba_wflag = lba | cdda_bit;
+      acdrom.buf_cache[i].deferred = deferred;
       memcpy(acdrom.buf_cache[i].buf, buf, sizeof(acdrom.buf_cache[i].buf));
       if (acdrom.have_subchannel)
          memcpy(acdrom.buf_cache[i].buf_sub, buf_sub, sizeof(buf_sub));
@@ -116,18 +130,21 @@ static void lbacache_do(u32 lba, u32 cdda_bit)
 #endif
 }
 
-static int lbacache_get(unsigned int lba, void *buf, void *sub_buf, int is_cdda)
+static int lbacache_get(unsigned int lba, void *buf, void *sub_buf, int is_cdda, int *deferred)
 {
    u32 i, cdda_bit = is_cdda ? (1u << 31) : 0;
    int ret = 0;
 
    i = lba % acdrom.buf_cnt;
    slock_lock(acdrom.buf_lock);
-   if ((lba | cdda_bit) == acdrom.buf_cache[i].lba_wflag) {
+   if ((lba | cdda_bit) == acdrom.buf_cache[i].lba_wflag &&
+       (!buf || deferred || !acdrom.buf_cache[i].deferred)) {
       if (buf)
          memcpy(buf, acdrom.buf_cache[i].buf, CD_FRAMESIZE_RAW);
       if (sub_buf)
          memcpy(sub_buf, acdrom.buf_cache[i].buf_sub, SUB_FRAMESIZE);
+      if (deferred)
+         *deferred = acdrom.buf_cache[i].deferred;
       ret = 1;
    }
    slock_unlock(acdrom.buf_lock);
@@ -270,6 +287,9 @@ int cdra_open(void)
 void cdra_close(void)
 {
    acdrom_dbg("%s\n", __func__);
+#ifdef HAVE_PSXRC
+   cdrMaterializeTransfer();
+#endif
    cdra_stop_thread();
    if (g_cd_handle) {
       rcdrom_close(g_cd_handle);
@@ -321,14 +341,14 @@ int cdra_prefetch(unsigned char m, unsigned char s, unsigned char f, int is_cdda
 }
 
 static int cdra_do_read(const unsigned char *time, int is_cdda,
-      void *buf, void *buf_sub)
+      void *buf, void *buf_sub, int *deferred)
 {
    u32 lba = MSF2SECT(time[0], time[1], time[2]);
    int hit = 0, ret = -1, read_locked = 0;
    do
    {
       if (acdrom.buf_lock) {
-         hit = lbacache_get(lba, buf, buf_sub, is_cdda);
+         hit = lbacache_get(lba, buf, buf_sub, is_cdda, deferred);
          if (hit)
             break;
       }
@@ -336,7 +356,7 @@ static int cdra_do_read(const unsigned char *time, int is_cdda,
          // maybe still prefetching
          slock_lock(acdrom.read_lock);
          read_locked = 1;
-         hit = lbacache_get(lba, buf, buf_sub, is_cdda);
+         hit = lbacache_get(lba, buf, buf_sub, is_cdda, deferred);
          if (hit) {
             hit = 2;
             break;
@@ -354,7 +374,7 @@ static int cdra_do_read(const unsigned char *time, int is_cdda,
       else if (is_cdda)
          ret = ISOreadCDDA(time, buf);
       else
-         ret = ISOreadTrack(time, buf);
+         ret = read_track(time, buf, deferred);
       if (ret)
          SysPrintf("cdrom read failed for lba %d: %d\n", lba, ret);
    }
@@ -377,12 +397,60 @@ int cdra_readTrack(const unsigned char *time)
       // just forward to ISOreadTrack to avoid extra copying
       return ISOreadTrack(time, NULL);
    }
-   return cdra_do_read(time, 0, acdrom.buf_local, NULL);
+   return cdra_do_read(time, 0, acdrom.buf_local, NULL, NULL);
 }
+
+#ifdef HAVE_PSXRC
+int cdra_readTrackDeferred(const unsigned char *time)
+{
+   int deferred = 0;
+   if (!acdrom.thread && !g_cd_handle)
+      return ISOreadTrackDeferred(time, NULL);
+   int ret = cdra_do_read(time, 0, acdrom.buf_local, NULL, &deferred);
+   return ret ? -1 : deferred;
+}
+
+int cdra_readTrackData(const unsigned char *time, void *buf)
+{
+   if (!acdrom.thread && !g_cd_handle)
+      return ISOreadTrack(time, buf);
+   return cdra_do_read(time, 0, buf, NULL, NULL);
+}
+
+int cdra_readDirectXA(const unsigned char *time, unsigned coding, struct xa_decode *xa)
+{
+   if (acdrom.read_lock)
+      slock_lock(acdrom.read_lock);
+   int ret = ISOreadDirectXA(time, coding, xa);
+   if (acdrom.read_lock)
+      slock_unlock(acdrom.read_lock);
+   return ret;
+}
+
+int cdra_videoHint(uint32_t lba, psxrc_video_hint *hint)
+{
+   if (acdrom.read_lock)
+      slock_lock(acdrom.read_lock);
+   int ret = ISOvideoHint(lba, hint);
+   if (acdrom.read_lock)
+      slock_unlock(acdrom.read_lock);
+   return ret;
+}
+
+int cdra_copyVideo(uint32_t lba, const psxrc_video_hint *hint, uint8_t *pixels, size_t capacity)
+{
+   if (acdrom.read_lock)
+      slock_lock(acdrom.read_lock);
+   int ret = ISOcopyVideo(lba, hint, pixels, capacity);
+   if (acdrom.read_lock)
+      slock_unlock(acdrom.read_lock);
+   return ret;
+}
+#endif
 
 int cdra_readCDDA(const unsigned char *time, void *buffer)
 {
-   return cdra_do_read(time, 1, buffer, NULL);
+   return cdra_do_read(time, 1, buffer, NULL, NULL);
 }
 
 int cdra_readSub(const unsigned char *time, void *buffer)
@@ -392,7 +460,7 @@ int cdra_readSub(const unsigned char *time, void *buffer)
    if (!acdrom.have_subchannel)
       return -1;
    acdrom_dbg("s  %d:%02d:%02d\n", time[0], time[1], time[2]);
-   return cdra_do_read(time, 0, NULL, buffer);
+   return cdra_do_read(time, 0, NULL, buffer, NULL);
 }
 
 // pointer to cached buffer from last cdra_readTrack() call
@@ -488,6 +556,9 @@ int cdra_open(void)
 
 void cdra_close(void)
 {
+#ifdef HAVE_PSXRC
+   cdrMaterializeTransfer();
+#endif
    ISOclose();
 }
 
@@ -511,6 +582,33 @@ int cdra_readTrack(const unsigned char *time)
 {
    return ISOreadTrack(time, NULL);
 }
+
+#ifdef HAVE_PSXRC
+int cdra_readTrackDeferred(const unsigned char *time)
+{
+   return ISOreadTrackDeferred(time, NULL);
+}
+
+int cdra_readTrackData(const unsigned char *time, void *buf)
+{
+   return ISOreadTrack(time, buf);
+}
+
+int cdra_readDirectXA(const unsigned char *time, unsigned coding, struct xa_decode *xa)
+{
+   return ISOreadDirectXA(time, coding, xa);
+}
+
+int cdra_videoHint(uint32_t lba, psxrc_video_hint *hint)
+{
+   return ISOvideoHint(lba, hint);
+}
+
+int cdra_copyVideo(uint32_t lba, const psxrc_video_hint *hint, uint8_t *pixels, size_t capacity)
+{
+   return ISOcopyVideo(lba, hint, pixels, capacity);
+}
+#endif
 
 int cdra_readCDDA(const unsigned char *time, void *buffer)
 {

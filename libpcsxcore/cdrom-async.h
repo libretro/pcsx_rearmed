@@ -5,6 +5,7 @@ extern "C" {
 #endif
 
 struct CdrStat;
+struct xa_decode;
 
 #ifdef HAVE_CDROM
 void *rcdrom_open(const char *name, u32 *total_lba, u32 *have_sub);
@@ -25,6 +26,14 @@ int  cdra_getTN(unsigned char *tn);
 int  cdra_getTD(int track, unsigned char *rt);
 int  cdra_getStatus(struct CdrStat *stat);
 int  cdra_readTrack(const unsigned char *time);
+#ifdef HAVE_PSXRC
+#include <psxrc.h>
+int  cdra_readTrackDeferred(const unsigned char *time);
+int  cdra_readTrackData(const unsigned char *time, void *buf);
+int  cdra_readDirectXA(const unsigned char *time, unsigned coding, struct xa_decode *xa);
+int  cdra_videoHint(uint32_t lba, psxrc_video_hint *hint);
+int  cdra_copyVideo(uint32_t lba, const psxrc_video_hint *hint, uint8_t *pixels, size_t capacity);
+#endif
 int  cdra_readCDDA(const unsigned char *time, void *buffer);
 int  cdra_readSub(const unsigned char *time, void *buffer);
 int  cdra_prefetch(unsigned char m, unsigned char s, unsigned char f, int is_cdda);

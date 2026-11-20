@@ -2508,6 +2508,11 @@ static void update_variables(bool in_flight)
 
    show_info_notifications = get_bool_variable("pcsx_rearmed_display_info");
 
+#ifdef HAVE_PSXRC
+   ISOsetDirectAudio(get_bool_variable("pcsx_rearmed_psxrc_direct_audio"));
+   ISOsetDirectVideo(get_bool_variable("pcsx_rearmed_psxrc_direct_h264"));
+#endif
+
    var.value = NULL;
    var.key = "pcsx_rearmed_cd_turbo";
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)

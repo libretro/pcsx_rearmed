@@ -27,6 +27,10 @@
 #include "cdrom_bits.h"
 #include "cdrom-async.h"
 #include "misc.h"
+#ifdef HAVE_PSXRC
+#include <stdio.h>
+#include "mdec.h"
+#endif
 #include "ppf.h"
 #include "psxdma.h"
 #include "psxevents.h"
@@ -407,22 +411,44 @@ static void generate_subq(const u8 *time)
 	cdr.subq.Absolute[2] = itob(time[2]);
 }
 
-static int ReadTrack(const u8 *time)
+#ifdef HAVE_PSXRC
+static int last_track_deferred, transfer_deferred;
+static u8 transfer_msf[3];
+static u32 video_transfer_lba = ~0u;
+#endif
+
+static int ReadTrackInternal(const u8 *time, int defer_xa)
 {
 	int ret;
 
 	CDR_LOG("ReadTrack *** %02d:%02d:%02d\n", time[0], time[1], time[2]);
 
-	if (memcmp(cdr.Prev, time, 3) == 0)
+	if (
+#ifdef HAVE_PSXRC
+	    (defer_xa || !last_track_deferred) &&
+#endif
+	    memcmp(cdr.Prev, time, 3) == 0)
 		return 1;
 
+#ifdef HAVE_PSXRC
+	ret = defer_xa ? cdra_readTrackDeferred(time) : cdra_readTrack(time);
+	last_track_deferred = defer_xa && ret == 1;
+	if (last_track_deferred)
+		ret = 0;
+#else
 	ret = cdra_readTrack(time);
+#endif
 	if (ret == 0)
 		memcpy(cdr.Prev, time, 3);
 	else
 		log_unhandled("ReadTrack %02d:%02d:%02d ret %d\n",
 			time[0], time[1], time[2], ret);
 	return ret == 0;
+}
+
+static int ReadTrack(const u8 *time)
+{
+	return ReadTrackInternal(time, 0);
 }
 
 static void UpdateSubq(const u8 *time)
@@ -1325,12 +1351,35 @@ static void cdrUpdateTransferBuf(const u8 *buf)
 	if (!buf)
 		return;
 	memcpy(cdr.Transfer, buf, DATA_SIZE);
+#ifdef HAVE_PSXRC
+	if (mdecDirectVideoEnabled)
+		video_transfer_lba = MSF2SECT(cdr.Prev[0], cdr.Prev[1], cdr.Prev[2]);
+	transfer_deferred = last_track_deferred;
+	if (transfer_deferred) {
+		memcpy(transfer_msf, cdr.Prev, sizeof(transfer_msf));
+		return;
+	}
+#endif
 	CheckPPFCache(cdr.Transfer, cdr.Prev[0], cdr.Prev[1], cdr.Prev[2]);
 	CDR_LOG("cdr.Transfer  %02x:%02x:%02x\n",
 		cdr.Transfer[0], cdr.Transfer[1], cdr.Transfer[2]);
 	if (cdr.FifoOffset < 2048 + 12)
 		CDR_LOG("FifoOffset(1) %d/%d\n", cdr.FifoOffset, cdr.FifoSize);
 }
+
+#ifdef HAVE_PSXRC
+void cdrMaterializeTransfer(void)
+{
+	u8 full[CD_FRAMESIZE_RAW];
+	if (!transfer_deferred)
+		return;
+	transfer_deferred = 0;
+	if (cdra_readTrackData(transfer_msf, full) == 0) {
+		memcpy(cdr.Transfer, full + 12, DATA_SIZE);
+		CheckPPFCache(cdr.Transfer, transfer_msf[0], transfer_msf[1], transfer_msf[2]);
+	}
+}
+#endif
 
 static void cdrReadInterrupt(void)
 {
@@ -1355,7 +1404,7 @@ static void cdrReadInterrupt(void)
 	cdr.DriveState = DRIVESTATE_PLAY_READ;
 	cdr.sectorsRead++;
 
-	read_ok = ReadTrack(cdr.SetSectorPlay);
+	read_ok = ReadTrackInternal(cdr.SetSectorPlay, cdr.Mode & MODE_STRSND);
 	if (read_ok)
 		buf = cdra_getBuffer();
 	if (buf == NULL)
@@ -1402,6 +1451,24 @@ static void cdrReadInterrupt(void)
 		if (Config.Xa)
 			break;
 		is_start = !cdr.AdpcmActive;
+#ifdef HAVE_PSXRC
+		if (last_track_deferred) {
+			unsigned coding = subhdr->coding;
+			if ((is_start || (cdr.Xa.nbits == 4 && cdr.Xa.stereo == !!(coding & 1) &&
+			    cdr.Xa.freq == ((coding & 4) ? 18900 : 37800))) &&
+			    cdra_readDirectXA(cdr.SetSectorPlay, coding, &cdr.Xa)) {
+				cdr.AdpcmActive = 1;
+				SPU_playADPCMchannel(&cdr.Xa, psxRegs.cycle, is_start);
+				break;
+			}
+			if (!ReadTrack(cdr.SetSectorPlay)) {
+				cdrReadInterruptSetResult(cdr.StatP | STATUS_ERROR);
+				cdr.DriveState = DRIVESTATE_PAUSED;
+				return;
+			}
+			buf = cdra_getBuffer();
+		}
+#endif
 		cdr.AdpcmActive = !xa_decode_sector(&cdr.Xa, buf + 4, is_start);
 		if (cdr.AdpcmActive)
 			SPU_playADPCMchannel(&cdr.Xa, psxRegs.cycle, is_start);
@@ -1528,6 +1595,10 @@ void cdrWrite1(unsigned char rt) {
 }
 
 unsigned char cdrRead2(void) {
+#ifdef HAVE_PSXRC
+	if (transfer_deferred)
+		cdrMaterializeTransfer();
+#endif
 	unsigned char ret = cdr.Transfer[0x920];
 
 	if (cdr.FifoOffset < cdr.FifoSize)
@@ -1673,6 +1744,10 @@ void psxDma3(u32 madr, u32 bcr, u32 chcr) {
 				CDR_LOG_I("psxDma3() Log: *** DMA 3 *** NULL Pointer!\n");
 				break;
 			}
+#ifdef HAVE_PSXRC
+			if (transfer_deferred)
+				cdrMaterializeTransfer();
+#endif
 
 			cdsize = (((bcr - 1) & 0xffff) + 1) * 4;
 
@@ -1689,6 +1764,19 @@ void psxDma3(u32 madr, u32 bcr, u32 chcr) {
 				size = max_words * 4;
 			if (size > 0)
 			{
+#ifdef HAVE_PSXRC
+				if ((mdecTraceEnabled || mdecDirectVideoEnabled) &&
+				    !memcmp(cdr.Transfer + 12, "\x60\x01\x01\x80", 4)) {
+					unsigned chunk = cdr.Transfer[16] | cdr.Transfer[17] << 8;
+					int lba = MSF2SECT(btoi(cdr.Transfer[0]), btoi(cdr.Transfer[1]), btoi(cdr.Transfer[2]));
+					if (mdecTraceEnabled)
+						fprintf(stderr, "PSXRC_DMA3 cycle=%u lba=%d chunk=%u addr=%08x offset=%u bytes=%d\n",
+							psxRegs.cycle, lba, chunk, madr, (unsigned)cdr.FifoOffset, size);
+					if (mdecDirectVideoEnabled && lba >= 0 && (u32)lba == video_transfer_lba &&
+					    cdr.FifoOffset <= 12 && cdr.FifoOffset + size >= 44)
+						mdecObserveVideo(video_transfer_lba, chunk);
+				}
+#endif
 				memcpy(ptr, cdr.Transfer + cdr.FifoOffset, size);
 				cdr.FifoOffset += size;
 			}
@@ -1740,6 +1828,10 @@ static void getCdInfo(void)
 }
 
 void cdrReset() {
+#ifdef HAVE_PSXRC
+	last_track_deferred = transfer_deferred = 0;
+	video_transfer_lba = ~0u;
+#endif
 	memset(&cdr, 0, sizeof(cdr));
 	cdr.CurTrack = 1;
 	cdr.FilterFile = 0;
@@ -1762,6 +1854,14 @@ int cdrFreeze(void *f, int Mode) {
 	u32 tmp;
 	u8 tmpp[3];
 
+#ifdef HAVE_PSXRC
+	if (Mode == 1)
+		cdrMaterializeTransfer();
+	else {
+		last_track_deferred = transfer_deferred = 0;
+		video_transfer_lba = ~0u;
+	}
+#endif
 	cdr.freeze_ver = 0x63647203;
 	gzfreeze(&cdr, sizeof(cdr));
 	

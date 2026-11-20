@@ -64,6 +64,9 @@ static inline void lba2msf(unsigned int lba, u8 *m, u8 *s, u8 *f) {
 }
 
 void cdrReset();
+#ifdef HAVE_PSXRC
+void cdrMaterializeTransfer(void);
+#endif
 
 void cdrInterrupt(void);
 void cdrPlayReadInterrupt(void);

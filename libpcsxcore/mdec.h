@@ -39,6 +39,12 @@ void psxDma1(u32 madr, u32 bcr, u32 chcr);
 void mdec0Interrupt();
 void mdec1Interrupt();
 int mdecFreeze(void *f, int Mode);
+#ifdef HAVE_PSXRC
+extern int mdecTraceEnabled;
+extern int mdecDirectVideoEnabled;
+void mdecSetDirectVideo(int enabled);
+void mdecObserveVideo(u32 lba, unsigned chunk);
+#endif
 
 #ifdef __cplusplus
 }
