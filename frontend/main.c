@@ -9,7 +9,9 @@
 #include <string.h>
 #include <stdarg.h>
 #include <unistd.h>
+#ifndef NO_FRONTEND
 #include <signal.h>
+#endif
 #include <time.h>
 #if !defined(_WIN32) && !defined(NO_DYLIB)
 #include <dlfcn.h>
@@ -580,12 +582,17 @@ int main(int argc, char *argv[])
 	char isofilename[MAXPATHLEN];
 	const char *cdfile = NULL;
 	const char *loadst_f = NULL;
+	const char *savest_f = NULL;
 	const char *save_exe_f = NULL;
+	const char *inrec_f = NULL;
+	const char *inplay_f = NULL;
+	int inplay_exit = 0;
 	int psxout = 0;
 	int psxin = 0;
 	int nothread = 0;
 	int nodrc = 0;
 	int loadst = 0;
+	int savest = 0;
 	int retval = 0;
 	int i;
 
@@ -606,6 +613,10 @@ int main(int argc, char *argv[])
 		else if (!strcmp(argv[i], "-load")) {
 			if (i+1 >= argc) break;
 			loadst = atol(argv[++i]);
+		}
+		else if (!strcmp(argv[i], "-save")) {
+			if (i+1 >= argc) break;
+			savest = atol(argv[++i]);
 		}
 		else if (!strcmp(argv[i], "-cfg")) {
 			if (i+1 >= argc) break;
@@ -631,10 +642,26 @@ int main(int argc, char *argv[])
 			if (i+1 >= argc) break;
 			loadst_f = argv[++i];
 		}
+		else if (!strcmp(argv[i], "-savef")) {
+			if (i+1 >= argc) break;
+			savest_f = argv[++i];
+		}
 		else if (!strcmp(argv[i], "-exesave")) {
 			if (i+1 >= argc) break;
 			save_exe_f = argv[++i];
 		}
+		else if (!strcmp(argv[i], "-inrec")) {
+			if (i+1 >= argc) break;
+			inrec_f = argv[++i];
+			nothread = 1; // else slight timing variations
+		}
+		else if (!strcmp(argv[i], "-inplay")) {
+			if (i+1 >= argc) break;
+			inplay_f = argv[++i];
+			nothread = 1;
+		}
+		else if (!strcmp(argv[i], "-inexit"))
+			inplay_exit = 1;
 		else if (!strcmp(argv[i], "-h") ||
 			 !strcmp(argv[i], "-help") ||
 			 !strcmp(argv[i], "--help")) {
@@ -651,7 +678,12 @@ int main(int argc, char *argv[])
 				"\t-nodrc\t\tDisable dynamic recompiler\n"
 				"\t-load STATENUM\tLoads savestate STATENUM (1-9)\n"
 				"\t-loadf FILE\tLoads savestate from FILE\n"
+				"\t-save STATENUM\tAuto-saves to slot STATENUM (1-9) on exit\n"
+				"\t-savef FILE\tAuto-saves savestate to FILE on exit\n"
 				"\t-exesave FILE\tWrite main game exe fo FILE\n"
+				"\t-inrec FILE\tRecord pad input to FILE\n"
+				"\t-inplay FILE\tPlay back pad input from FILE\n"
+				"\t-inexit\t\tExit when the input playback ends\n"
 				"\t-h,-help\tDisplay this message\n"
 				"\tfile\t\tLoads a PSX EXE file\n"));
 			 return 0;
@@ -671,6 +703,10 @@ int main(int argc, char *argv[])
 
 	if (cdfile)
 		set_cd_image(cdfile);
+	if (inplay_f && pl_inrec_start(inplay_f, 1, inplay_exit) != 0)
+		return 1;
+	if (inrec_f && pl_inrec_start(inrec_f, 0, 0) != 0)
+		return 1;
 
 	// frontend stuff
 	// init input but leave probing to platform code,
@@ -772,6 +808,18 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	if (savest_f) {
+		int ret = SaveState(savest_f);
+		SysPrintf("%s state file: %s\n",
+			ret ? "failed to save" : "saved", savest_f);
+	}
+	if (CdromId[0] && savest) {
+		int ret = emu_save_state(savest - 1);
+		SysPrintf("%s state slot %d\n",
+			ret ? "failed to save" : "saved", savest);
+	}
+
+	pl_inrec_finish();
 	ClosePlugins();
 	SysClose();
 	menu_finish();
