@@ -917,7 +917,7 @@ static int handlepbp(const char *isofile) {
 		if (i > 1)
 			ti[i - 1].length = ti[i].start - ti[i - 1].start;
 	}
-	ti[numtracks].length = cd_length - ti[numtracks].start_offset / 2352;
+	ti[numtracks].length = cd_length - ti[numtracks].start;
 
 	// seek to ISO index
 	ret = fseeko(cdHandle, psisoimg_offs + 0x4000, SEEK_SET);
