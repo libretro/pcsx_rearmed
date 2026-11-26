@@ -791,12 +791,12 @@ static int handlepbp(const char *isofile) {
 		unsigned int dontcare[6];
 	} index_entry;
 	char psar_sig[11];
-	off_t psisoimg_offs, cdimg_base;
+	off_t psisoimg_offs, cdimg_base, block_bytes;
 	unsigned int cd_length;
 	unsigned int offsettab[8];
 	unsigned int psar_offs, index_entry_size, index_entry_offset;
 	const char *ext = NULL;
-	int i, ret;
+	int i, j, ret, is_raw;
 
 	if (strlen(isofile) >= 4)
 		ext = isofile + strlen(isofile) - 4;
@@ -943,6 +943,12 @@ static int handlepbp(const char *isofile) {
 	}
 
 	cdimg_base = psisoimg_offs + 0x100000;
+	block_bytes = (off_t)CD_FRAMESIZE_RAW << compr_img->block_shift;
+	/* PBP_RAW_BLOCK: PSX2PSP with compression disabled (and tools
+	 * derived from it) stores each block as raw sector data.  Detect
+	 * that from the whole index table: a compressed table cannot have
+	 * every block be exactly one uncompressed block long. */
+	is_raw = 1;
 	for (i = 0; i < compr_img->index_len; i++) {
 		ret = fread(&index_entry, 1, sizeof(index_entry), cdHandle);
 		if (ret != sizeof(index_entry)) {
@@ -957,8 +963,15 @@ static int handlepbp(const char *isofile) {
 			break;
 
 		compr_img->index_table[i] = cdimg_base + index_entry_offset;
+		if (index_entry_size != block_bytes)
+			is_raw = 0;
 	}
 	compr_img->index_table[i] = cdimg_base + index_entry_offset + index_entry_size;
+
+	if (is_raw && i > 0) {
+		for (j = 0; j <= i; j++)
+			compr_img->index_table[j] |= OFF_T_MSB;
+	}
 
 	return 0;
 
