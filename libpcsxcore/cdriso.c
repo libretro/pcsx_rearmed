@@ -97,6 +97,9 @@ static struct {
 static int (*cdimg_read_func)(FILE *f, unsigned int base, void *dest, int sector);
 static int (*cdimg_read_sub_func)(FILE *f, int sector, void *dest);
 
+/* see cdriso.h */
+int cdda_data_pcm = 0;
+
 static void DecodeRawSubData(unsigned char *subbuffer);
 
 struct trackinfo {
@@ -1900,4 +1903,18 @@ clear_return:
 	if (buffer)
 		memset(buffer, 0, CD_FRAMESIZE_RAW);
 	return ret_clear;
+}
+
+/* Is this position on a data track (as opposed to a CD-DA track)? */
+int ISOisDataTrack(const unsigned char *time)
+{
+	unsigned int track, pos = msf2sec(time);
+
+	for (track = numtracks; ; track--) {
+		if (ti[track].start <= pos)
+			break;
+		if (track == 1)
+			break;
+	}
+	return ti[track].type != CDRT_CDDA;
 }

@@ -954,6 +954,22 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       },
       "enabled",
    },
+#ifdef USE_ASYNC_CDROM
+   {
+      "pcsx_rearmed_cdda_data_pcm",
+      "Data-Track CDDA as PCM",
+      NULL,
+      "Some converted PBP images store CD-DA audio as 2048-byte PCM files in the data track. When enabled, CD-DA playback on a data track treats the 2048-byte user area as 16-bit stereo PCM and linearly interpolates the 304-byte sector header/ECC gap, removing the loud noise. Leave off for normal discs.",
+      NULL,
+      "audio",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+#endif
 #ifdef USE_ASYNC_SPU
    {
       "pcsx_rearmed_spu_thread",

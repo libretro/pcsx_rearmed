@@ -380,8 +380,64 @@ int cdra_readTrack(const unsigned char *time)
    return cdra_do_read(time, 0, acdrom.buf_local, NULL);
 }
 
+/* Converted PBP repacks keep the original CD-DA tracks as 2048-byte PCM
+ * files in the data track and still issue CdlPlay on it.  Reading such a
+ * sector as CD-DA plays the sync/header/ECC bytes between the PCM chunks,
+ * which is loud broadband noise.  Rebuild those 304 bytes (76 stereo
+ * frames) by interpolating between the neighbouring PCM samples. */
+static int cdda_pcm_read(const unsigned char *time, void *buffer)
+{
+   unsigned char cur[CD_FRAMESIZE_RAW], nxt[CD_FRAMESIZE_RAW];
+   unsigned char next_msf[3];
+   static int pcm_prev_pos = -1;
+   static int pcm_prev_l, pcm_prev_r;
+   s16 *out = buffer;
+   u32 lba = MSF2SECT(time[0], time[1], time[2]);
+   int prev_l, prev_r, first_l, first_r, last_l, last_r, next_l, next_r, i;
+
+   if (cdra_do_read(time, 0, cur, NULL) != 0)
+      return -1;
+
+   /* Look ahead one sector for the far end of the gap. */
+   lba2msf(lba + 150 + 1, &next_msf[0], &next_msf[1], &next_msf[2]);
+   if (cdra_do_read(next_msf, 0, nxt, NULL) != 0)
+      memcpy(nxt, cur, sizeof(nxt));
+
+   first_l = (s16)(cur[24] | (cur[25] << 8));
+   first_r = (s16)(cur[26] | (cur[27] << 8));
+   next_l = (s16)(nxt[24] | (nxt[25] << 8));
+   next_r = (s16)(nxt[26] | (nxt[27] << 8));
+   last_l = (s16)(cur[2068] | (cur[2069] << 8));
+   last_r = (s16)(cur[2070] | (cur[2071] << 8));
+   prev_l = (pcm_prev_pos == (int)lba - 1) ? pcm_prev_l : first_l;
+   prev_r = (pcm_prev_pos == (int)lba - 1) ? pcm_prev_r : first_r;
+
+   /* Header: last 6 frames of the 76-frame gap. */
+   for (i = 0; i < 6; i++) {
+      int t = 71 + i;
+      out[i * 2] = (s16)(prev_l + (first_l - prev_l) * t / 77);
+      out[i * 2 + 1] = (s16)(prev_r + (first_r - prev_r) * t / 77);
+   }
+   memcpy((u8 *)out + 24, cur + 24, 2048);
+   /* ECC area: first 70 frames of the gap. */
+   for (i = 0; i < 70; i++) {
+      int t = i + 1;
+      out[1036 + i * 2] = (s16)(last_l + (next_l - last_l) * t / 77);
+      out[1036 + i * 2 + 1] = (s16)(last_r + (next_r - last_r) * t / 77);
+   }
+
+   pcm_prev_pos = lba;
+   pcm_prev_l = last_l;
+   pcm_prev_r = last_r;
+   return 0;
+}
+
 int cdra_readCDDA(const unsigned char *time, void *buffer)
 {
+   if (!g_cd_handle && cdda_data_pcm && ISOisDataTrack(time)) {
+      if (cdda_pcm_read(time, buffer) == 0)
+         return 0;
+   }
    return cdra_do_read(time, 1, buffer, NULL);
 }
 
