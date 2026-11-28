@@ -36,9 +36,18 @@ int ISOgetTD(int track, unsigned char *buffer);
 int ISOreadTrack(const unsigned char *time, void *buf);
 int ISOreadCDDA(const unsigned char *time, void *buffer);
 int ISOreadSub(const unsigned char *time, void *buffer);
+int ISOisDataTrack(const unsigned char *time);
 int ISOgetStatus(struct CdrStat *stat);
 
 extern void * (*ISOgetBuffer)(void);
+
+/* Some converted PBP images (a single data track with the original CD-DA
+ * tracks rewritten as 2048-byte PCM files) still issue CdlPlay on the data
+ * track.  In that case the 2048-byte user area is audio and the 304-byte
+ * sector overhead is header/ECC garbage; synthesize the missing samples
+ * instead of playing it verbatim.  Disabled by default, since on real discs
+ * data tracks play silence. */
+extern int cdda_data_pcm;
 
 extern unsigned int cdrIsoMultidiskCount;
 extern unsigned int cdrIsoMultidiskSelect;

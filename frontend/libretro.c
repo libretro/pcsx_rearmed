@@ -2743,6 +2743,11 @@ static void update_variables(bool in_flight)
    }
 
    var.value = NULL;
+   var.key = "pcsx_rearmed_cdda_data_pcm";
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      cdda_data_pcm = (strcmp(var.value, "enabled") == 0);
+
+   var.value = NULL;
    var.key = "pcsx_rearmed_gpu_slow_llists";
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
    {
